@@ -1,4 +1,5 @@
 autograder	2
-eecs485goodbye	1
+eecs485	1
+goodbye	1
 hello	3
 world	1

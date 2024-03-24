@@ -56,15 +56,16 @@ case $1 in
     ;;
 
   "stop")
+    echo "Stopping mapreduce ..."
     mapreduce-submit --shutdown --host localhost --port 6000 || true
     sleep 2  # give the Manager time to receive signal and send to Workers
     if pgrep -f mapreduce-manager &> /dev/null; then
-    echo "killing mapreduce manager ..."
-    pkill -f mapreduce-manager || true
+        echo "killing mapreduce manager ..."
+        pkill -f mapreduce-manager || true
     fi
     if pgrep -f mapreduce-worker &> /dev/null; then
-    echo "killing mapreduce worker ..."
-    pkill -f mapreduce-worker || true
+        echo "killing mapreduce worker ..."
+        pkill -f mapreduce-worker || true
     fi
     ;;
 
