@@ -78,7 +78,7 @@ class Manager:
                 # Decode list-of-byte-strings to UTF8 and parse JSON data
                 message_bytes = b''.join(message_chunks)
                 message_str = message_bytes.decode("utf-8")
-
+                print("???", message_str)
                 try:
                     message_dict = json.loads(message_str)
                 except json.JSONDecodeError:

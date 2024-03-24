@@ -26,15 +26,6 @@ class Worker:
             manager_host, manager_port,
         )
 
-        # This is a fake message to demonstrate pretty printing with logging
-        # message_dict = {
-        #     "message_type": "register_ack",
-        #     "worker_host": "localhost",
-        #     "worker_port": 6001,
-        # }
-        # LOGGER.debug("TCP recv\n%s", json.dumps(message_dict, indent=2))
-
-        #TODO:
         self.host = host
         self.port = port
         self.manager_host = manager_host
@@ -42,12 +33,10 @@ class Worker:
         self.signals = {"shutdown": False}
 
 
-        # thread = threading.Thread(target = self.worker_tcp_server)
-        # thread.start()
-        # thread_tcp_client = threading.Thread(target = self.worker_tcp_client)
-        # thread_tcp_client.start()
-        self.worker_tcp_client()
-        self.worker_tcp_server()
+        thread_tcp_server = threading.Thread(target = self.worker_tcp_server)
+        thread_tcp_server.start()
+
+        thread_tcp_server.join()
 
 
     def worker_tcp_server(self):
@@ -57,6 +46,7 @@ class Worker:
             sock.bind((self.host, self.port))
             sock.listen()
             sock.settimeout(1)
+            self.worker_tcp_ack()
 
             while not self.signals["shutdown"] :
                 # Wait for a connection for 1s.  The socket library avoids consuming
@@ -99,10 +89,7 @@ class Worker:
                     break
                 #  else do work
                     
-
-
-
-    def worker_tcp_client(self):
+    def worker_tcp_ack(self):
         """Send a registration message to the Manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect((self.manager_host, self.manager_port))
