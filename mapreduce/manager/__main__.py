@@ -8,6 +8,8 @@ import click
 import mapreduce.utils
 import socket
 import threading
+import queue
+import shutil
 
 
 # Configure logging
@@ -23,28 +25,20 @@ class Manager:
         self.port = port
         self.signals = {"shutdown": False}
         self.workers = {}
+        self.job_queue = queue.Queue()
+        self.job_count = 0
 
+        self.manager_tcp_server()
+        self.manager_tcp_client()
+        
+        #thread = threading.Thread(target = self.manager_tcp_server)
+        #thread.start()
+        #thread.join()
+        
         LOGGER.info(
             "Starting manager host=%s port=%s pwd=%s",
             host, port, os.getcwd(),
         )
-
-        # This is a fake message to demonstrate pretty printing with logging
-        # message_dict = {
-        #     "message_type": "register",
-        #     "worker_host": "localhost",
-        #     "worker_port": 6001,
-        # }
-        # LOGGER.debug("TCP recv\n%s", json.dumps(message_dict, indent=2))
-
-        # TODO:
-
-        #thread = threading.Thread(target = self.manager_tcp_server)
-        #thread.start()
-        #thread.join()
-        self.manager_tcp_server()
-        self.manager_tcp_client()
-
 
 
 # phling的code：
@@ -64,15 +58,9 @@ class Manager:
                 except socket.timeout:
                     continue
                 LOGGER.info("Connection from %s", address[0])
-            # Socket recv() will block for a maximum of 1 second.  If you omit
-            # this, it blocks indefinitely, waiting for packets.
+
                 clientsocket.settimeout(1)
-                # Receive data, one chunk at a time.  If recv() times out before we
-            # can read a chunk, then go back to the top of the loop and try
-            # again.  When the client closes the connection, recv() returns
-            # empty data, which breaks out of the loop.  We make a simplifying
-            # assumption that the client will always cleanly close the
-            # connection.
+
                 with clientsocket:
                     message_chunks = []
                     while True:    # ????????
@@ -125,7 +113,19 @@ class Manager:
                             ack_message = json.dumps({"message_type": "register_ack"})
                             sock.sendall(ack_message.encode('utf-8'))
                             LOGGER.info(f"Sent registration acknowledgment to worker {worker_id}.")
-                    
+                elif message_dict["message_type"] == "new_manager_job":
+                    job = {
+                            "job_id": self.job_count,
+                            "input_directory": message_dict["input_directory"],
+                            "output_directory": message_dict["output_directory"],
+                            "mapper_executable": message_dict["mapper_executable"],
+                            "reducer_executable": message_dict["reducer_executable"],
+                            "num_mappers" : message_dict["num_mappers"],
+                            "num_reducers" : message_dict["num_reducers"]
+                            }
+                    self.job_count += 1
+                    self.job_queue.put(job)
+                    LOGGER.info(f"Added Job: {job["job_id"]}")
 
 
     def manager_tcp_client(self):
@@ -139,6 +139,37 @@ class Manager:
             # send a message
             message = json.dumps({"hello": "world"})
             sock.sendall(message.encode('utf-8'))
+    
+    def run_job(self):
+        while not self.signals["shutdown"]:
+            try:
+                # Wait for a job to be available in the queue or check periodically
+                job = self.job_queue.get(timeout=1)  # Adjust timeout as necessary
+                LOGGER.info(f"Starting job {job.job_id}")
+                # delete output directory
+                if os.path.exists(job.output_directory):
+                    shutil.rmtree(job.output_directory)
+                    LOGGER.info(f"Deleted existing output directory: {job.output_directory}")
+
+                # Create the output directory
+                os.makedirs(job.output_directory)
+                LOGGER.info(f"Created output directory: {job.output_directory}")
+
+                # Create a shared directory for temporary intermediate files
+                prefix = f"mapreduce-shared-job{job.job_id:05d}-" 
+                # prefix = f"mapreduce-shared-job{self.job_id:05d}-"
+                with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
+                    LOGGER.info("Created tmpdir %s", tmpdir)
+                    # FIXME: Change this loop so that it runs either until shutdown 
+                    # or when the job is completed.
+                    while (not self.signals["shutdown"]) or 
+                        time.sleep(0.1)
+                LOGGER.info("Cleaned up tmpdir %s", tmpdir)
+
+            except queue.Empty:
+                # No job was available in the queue
+                pass
+            
 
 
 
