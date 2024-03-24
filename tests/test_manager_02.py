@@ -154,7 +154,7 @@ def test_map(mocker, tmp_path):
     # Pro-tip: show log messages and detailed diffs with
     #   $ pytest -vvs --log-cli-level=info tests/test_manager_X.py
     messages = utils.get_messages_with_destinations(mock_sendall, mock_connect)
-
+    
     assert messages[:3] == [
         (
             {
