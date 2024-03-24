@@ -125,7 +125,7 @@ class Manager:
                             }
                     self.job_count += 1
                     self.job_queue.put(job)
-                    LOGGER.info(f"Added Job: {job["job_id"]}")
+                    LOGGER.info(f"Added Job with Job id: {job['job_id']}")
 
 
     def manager_tcp_client(self):
