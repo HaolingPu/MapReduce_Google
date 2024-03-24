@@ -31,9 +31,10 @@ class Manager:
         self.manager_tcp_server()
         self.manager_tcp_client()
         
-        #thread = threading.Thread(target = self.manager_tcp_server)
-        #thread.start()
+        thread = threading.Thread(target = self.manager_tcp_server)
+        thread.start()
         #thread.join()
+        threading.Thread(target=self.run_job).start()
         
         LOGGER.info(
             "Starting manager host=%s port=%s pwd=%s",
@@ -145,24 +146,25 @@ class Manager:
             try:
                 # Wait for a job to be available in the queue or check periodically
                 job = self.job_queue.get(timeout=1)  # Adjust timeout as necessary
-                LOGGER.info(f"Starting job {job.job_id}")
+                LOGGER.info(f"Starting job {job['job_id']}")
                 # delete output directory
-                if os.path.exists(job.output_directory):
-                    shutil.rmtree(job.output_directory)
-                    LOGGER.info(f"Deleted existing output directory: {job.output_directory}")
+                output_directory = job["output_directory"]
+                if os.path.exists(output_directory):
+                    shutil.rmtree(output_directory)
+                    LOGGER.info(f"Deleted existing output directory: {output_directory}")
 
                 # Create the output directory
-                os.makedirs(job.output_directory)
-                LOGGER.info(f"Created output directory: {job.output_directory}")
+                os.makedirs(output_directory)
+                LOGGER.info(f"Created output directory: {output_directory}")
 
                 # Create a shared directory for temporary intermediate files
-                prefix = f"mapreduce-shared-job{job.job_id:05d}-" 
+                prefix = f"mapreduce-shared-job{job['job_id']:05d}-" 
                 # prefix = f"mapreduce-shared-job{self.job_id:05d}-"
                 with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
                     LOGGER.info("Created tmpdir %s", tmpdir)
                     # FIXME: Change this loop so that it runs either until shutdown 
                     # or when the job is completed.
-                    while (not self.signals["shutdown"]) or 
+                    while (not self.signals["shutdown"]) or not job.is_completed():
                         time.sleep(0.1)
                 LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
