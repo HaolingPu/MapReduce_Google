@@ -42,8 +42,10 @@ class Worker:
         self.signals = {"shutdown": False}
 
 
-        #thread = threading.Thread(target = self.worker_tcp_server)
-        #thread.start()
+        # thread = threading.Thread(target = self.worker_tcp_server)
+        # thread.start()
+        # thread_tcp_client = threading.Thread(target = self.worker_tcp_client)
+        # thread_tcp_client.start()
         self.worker_tcp_client()
         self.worker_tcp_server()
 
