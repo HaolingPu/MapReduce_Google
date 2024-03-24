@@ -44,7 +44,6 @@ class Worker:
 
         thread = threading.Thread(target = self.worker_tcp_server)
         thread.start()
-        self.worker_tcp_server()
         self.worker_tcp_client()
 
 
@@ -63,7 +62,7 @@ class Worker:
                     clientsocket, address = sock.accept()
                 except socket.timeout:
                     continue
-                LOGGER.info("Connection from")  # address[0] 有问题现在！！！ 里面没有东西
+                LOGGER.info(f"Connection from {address[0]}")
 
                 
                 clientsocket.settimeout(1)
@@ -83,6 +82,7 @@ class Worker:
                 message_bytes = b''.join(message_chunks)
                 message_str = message_bytes.decode("utf-8")
 
+                LOGGER.info(message_str)
                 try:
                     message_dict = json.loads(message_str)
                 except json.JSONDecodeError:
@@ -93,6 +93,7 @@ class Worker:
                 if message_dict["message_type"] == "shutdown" :
                     # 如果worker is busy， 先完成job再shutdown
                     self.signals["shutdown"] = True
+                    break
                 #  else do work
                     
 

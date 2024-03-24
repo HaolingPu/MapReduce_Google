@@ -7,6 +7,7 @@ import time
 import click
 import mapreduce.utils
 import socket
+import threading
 
 
 # Configure logging
@@ -21,7 +22,7 @@ class Manager:
         self.host = host
         self.port = port
         self.signals = {"shutdown": False}
-        self.workers = []
+        self.workers = {}
 
         LOGGER.info(
             "Starting manager host=%s port=%s pwd=%s",
@@ -37,7 +38,13 @@ class Manager:
         # LOGGER.debug("TCP recv\n%s", json.dumps(message_dict, indent=2))
 
         # TODO:
-        self.manager_tcp_server()
+
+        thread = threading.Thread(target = self.manager_tcp_server)
+        thread.start()
+        time.sleep(10)
+        if self.signals["shutdown"] == True :
+            thread.join()
+
 
 
 # phling的code：
@@ -91,18 +98,33 @@ class Manager:
 
                 if message_dict["message_type"] == "shutdown" :
                     # send the shutdown message to all the workers
-                    for worker in self.workers:
+                    for worker_id in self.workers:
+                        worker_host, worker_port = worker_id
                         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                             # connect to the server
-                            sock.connect((worker.host, worker.port))
+                            sock.connect((worker_host, worker_port))
                             # send a message
-                            message = json.dumps({"shutdown": True})
+                            message = json.dumps({"message_type": "shutdown"})
                             sock.sendall(message.encode('utf-8'))
 
                     self.signals["shutdown"] = True
                     LOGGER.info("Manager shut down!")
-                                
 
+                elif message_dict["message_type"] == "register":
+                    worker_id = (message_dict["worker_host"], message_dict["worker_port"])
+                    self.workers[worker_id] = {
+                        "status": "ready",
+                        # "last_ping": time.time(),
+                        "current_task": None
+                    }
+                    LOGGER.info(f"Worker registered: {worker_id}")
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                            # connect to the server
+                            sock.connect((worker_host, worker_port))
+                            ack_message = json.dumps({"message_type": "register_ack"})
+                            sock.sendall(ack_message.encode('utf-8'))
+                            LOGGER.info(f"Sent registration acknowledgment to worker {worker_id}.")
+                    
 
 
     def manager_tcp_client(self):
