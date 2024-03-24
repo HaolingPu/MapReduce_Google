@@ -63,7 +63,7 @@ class Worker:
                     clientsocket, address = sock.accept()
                 except socket.timeout:
                     continue
-                LOGGER.info("Connection from", address[0])
+                LOGGER.info("Connection from")  # address[0] 有问题现在！！！ 里面没有东西
 
                 
                 clientsocket.settimeout(1)
