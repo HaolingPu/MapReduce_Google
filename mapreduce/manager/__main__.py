@@ -27,14 +27,17 @@ class Manager:
         self.workers = {}
         self.job_queue = queue.Queue()
         self.job_count = 0
+        self.finished_job_tasks = 0
 
         self.manager_tcp_server()
         self.manager_tcp_client()
         
-        thread = threading.Thread(target = self.manager_tcp_server)
-        thread.start()
-        #thread.join()
-        threading.Thread(target=self.run_job).start()
+        thread_tcp_server = threading.Thread(target = self.manager_tcp_server)
+        thread_tcp_server.start()
+        thread_tcp_client = threading.Thread(target = self.manager_tcp_client)
+        thread_tcp_client.start()
+
+        self.run_job()
         
         LOGGER.info(
             "Starting manager host=%s port=%s pwd=%s",
@@ -127,6 +130,8 @@ class Manager:
                     self.job_count += 1
                     self.job_queue.put(job)
                     LOGGER.info(f"Added Job with Job id: {job['job_id']}")
+                elif message_dict["message_type"] == "finished":
+                    self.finished_job_tasks += 1
 
 
     def manager_tcp_client(self):
@@ -142,6 +147,7 @@ class Manager:
             sock.sendall(message.encode('utf-8'))
     
     def run_job(self):
+        
         while not self.signals["shutdown"]:
             try:
                 # Wait for a job to be available in the queue or check periodically
@@ -164,7 +170,7 @@ class Manager:
                     LOGGER.info("Created tmpdir %s", tmpdir)
                     # FIXME: Change this loop so that it runs either until shutdown 
                     # or when the job is completed.
-                    while (not self.signals["shutdown"]) or not job.is_completed():
+                    while (not self.signals["shutdown"]) or (self.finished_job_tasks == job['num_mappers'] + job['num_reducers']):
                         time.sleep(0.1)
                 LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
