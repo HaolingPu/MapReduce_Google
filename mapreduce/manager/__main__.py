@@ -39,11 +39,11 @@ class Manager:
 
         # TODO:
 
-        thread = threading.Thread(target = self.manager_tcp_server)
-        thread.start()
-        time.sleep(10)
-        if self.signals["shutdown"] == True :
-            thread.join()
+        #thread = threading.Thread(target = self.manager_tcp_server)
+        #thread.start()
+        #thread.join()
+        self.manager_tcp_server()
+        self.manager_tcp_client()
 
 
 
@@ -112,6 +112,7 @@ class Manager:
 
                 elif message_dict["message_type"] == "register":
                     worker_id = (message_dict["worker_host"], message_dict["worker_port"])
+                    worker_host, worker_port = worker_id
                     self.workers[worker_id] = {
                         "status": "ready",
                         # "last_ping": time.time(),
