@@ -29,13 +29,12 @@ class Manager:
         self.job_count = 0
         self.finished_job_tasks = 0
 
-        self.manager_tcp_server()
-        self.manager_tcp_client()
-        
+
         thread_tcp_server = threading.Thread(target = self.manager_tcp_server)
         thread_tcp_server.start()
         thread_tcp_client = threading.Thread(target = self.manager_tcp_client)
         thread_tcp_client.start()
+        
 
         self.run_job()
         
