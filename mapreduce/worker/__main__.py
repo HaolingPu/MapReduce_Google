@@ -10,6 +10,7 @@ import threading
 import tempfile
 import hashlib
 import subprocess
+import shutil
 
 
 # Configure logging
@@ -93,12 +94,12 @@ class Worker:
                     break
                 #  else do work
                 elif message_dict["message_type"] == "new_map_task":
-                    map_task = message_dict["message_type"]
-                    self.mapper_worker(map_task)
+                    self.mapper_worker(message_dict)
+                    self.send_finished_message(message_dict['task_id'])
 
 
     def mapper_worker(self, map_task):
-        task_id = map_task['task_id']
+        task_id = int(map_task['task_id'])
         map_executable = map_task['executable']
         input_paths = map_task['input_paths']
         shared_dir = map_task['output_directory']
@@ -107,42 +108,57 @@ class Worker:
         prefix = f"mapreduce-local-task{task_id:05d}-"
         with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
             LOGGER.info("Created local tmpdir %s", tmpdir)
+            partition_files = {}  # Track open file descriptors
+            # run executable on each file
             # run executable on each file
             for input_path in input_paths:
-                mapper_command = f"{map_executable} {input_path}"
-                output = subprocess.run(mapper_command, shell=True, capture_output=True, text=True)
-                print(output)
-                for line in output.stdout.splitlines():
+                with open(input_path, 'r') as infile:
+                    process = subprocess.Popen(
+                        [map_executable],
+                        stdin=infile,
+                        stdout=subprocess.PIPE,
+                        text=True
+                    )
+                for line in process.stdout:
                     # partition
-                    key, value = line.decode('utf-8').split('\t', 1)
+                    key, value = line.split('\t', 1)
                     hexdigest = hashlib.md5(key.encode("utf-8")).hexdigest()
                     keyhash = int(hexdigest, base=16)
                     partition_number = keyhash % num_partitions
-                    output_path = os.path.join(tmpdir, f"maptask{task_id:05d}-part{partition_number:05d}")
-                    
-                    with open(output_path, 'w') as file:
-                        file.write(line.decode('utf-8') + '\n') # write key value pair into part
-                    
+                    partition_path = os.path.join(tmpdir, f"maptask{task_id:05d}-part{partition_number:05d}")
+                    #如果没有才需要加这个 direction
+                    if partition_path not in partition_files:
+                        partition_files[partition_path] = open(partition_path, 'a')
+                    partition_files[partition_path].write(line)
+                    # with open(partition_path, 'w') as file:
+                    #     file.write(line.decode('utf-8') + '\n') # write key value pair into part
+            for f in partition_files.values():
+                f.close()
+                # Sort and move files to shared directory
+            for partitionfiles in os.listdir(tmpdir):
+                file_path = os.path.join(tmpdir, partitionfiles)
+                # Sort file
+                subprocess.run(['sort', '-o',file_path, file_path], check = True)
+                # Move to shared directory
+                shutil.move(file_path, os.path.join(shared_dir, partitionfiles))
+
         LOGGER.info("Cleaned up tmpdir %s", tmpdir)
-        
-    
-        
 
 
+    def send_finished_message(self, task_id):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            # Establish connection to the Manager's main socket
+            sock.connect((self.manager_host, self.manager_port))
+            finished_message = {
+                "message_type": "finished",
+                "task_id": task_id,
+                "worker_host": self.host,
+                "worker_port": self.port,
+            }
+            message_str = json.dumps(finished_message)
+            sock.sendall(message_str.encode('utf-8'))
+        LOGGER.info(f"Sent 'finished' message for task {task_id}.")
         
-        
-        
-    
-
-            
-        #{
-        # "message_type": "new_map_task",
-        # "task_id": int,
-        # "input_paths": [list of strings],
-        # "executable": string,
-        # "output_directory": string,
-        # "num_partitions": int,
-        # }
                             
                     
     def worker_tcp_ack(self):
