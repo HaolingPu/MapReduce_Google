@@ -33,9 +33,14 @@ class Manager:
 
 
         thread_tcp_server = threading.Thread(target = self.manager_tcp_server)
+        thread_tcp_server.name = "manager_server"
         thread_tcp_server.start()
         #thread_tcp_client = threading.Thread(target = self.manager_tcp_client)
         #thread_tcp_client.start()
+        formatter = logging.Formatter(
+            f"Manager:{port}:%(threadName)s [%(levelname)s] %(message)s"
+        )
+
         
 
         self.run_job()
@@ -69,7 +74,7 @@ class Manager:
 
                 with clientsocket:
                     message_chunks = []
-                    while True:    # ????????
+                    while True:
                         try:
                             data = clientsocket.recv(4096)
                         except socket.timeout:
@@ -102,6 +107,7 @@ class Manager:
                             sock.sendall(message.encode('utf-8'))
 
                     self.signals["shutdown"] = True
+                    break
                     LOGGER.info("Manager shut down!")
 
                 elif message_dict["message_type"] == "register":
@@ -140,11 +146,24 @@ class Manager:
           
                         
     def run_job(self):
-        
         while not self.signals["shutdown"]:
             try:
                 # Wait for a job to be available in the queue or check periodically
                 job = self.job_queue.get(timeout=1)  # Adjust timeout as necessary
+                files = []
+                for filename in os.listdir(job['input_directory']):
+                    file_path = os.path.join(job['input_directory'], filename)
+                    if os.path.isfile(file_path):
+                        # Add the file to the list only if it is a regular file
+                        files.append(filename)
+                # Sort the list of files by name
+                sorted_files = sorted(files)
+                partitions_files = [[] for _ in range(job['num_mappers'])]
+                for i, file_name in enumerate(sorted_files):
+                    mapper_index = i % job['num_mappers']
+                    partitions_files[mapper_index].append(file_name)
+
+                    
                 LOGGER.info(f"Starting job {job['job_id']}")
                 # delete output directory
                 output_directory = job["output_directory"]
@@ -162,53 +181,43 @@ class Manager:
                 with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
                     LOGGER.info("Created tmpdir %s", tmpdir)
                     # Change this loop so that it runs either until shutdown or when the job is completed.
-                    while (not self.signals["shutdown"]) or (self.finished_job_tasks == job['num_mappers'] + job['num_reducers']):
-                        print("GOAL,", job['num_mappers'], job['num_reducers'])
-                        print(self.finished_job_tasks)
-                        self.send_tasks(job, tmpdir)
+                    task_id = 0
+                    while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
+                        if partitions_files:
+                            length = len(partitions_files)
+                            self.send_tasks(job, partitions_files, tmpdir, task_id)
+                            if len(partitions_files) == length - 1:
+                                task_id += 1
                         time.sleep(0.1)
                 LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
             except queue.Empty:
                 # No job was available in the queue
                 pass
-    def send_tasks(self, job, tmpdir):
-        files = []
-        for filename in os.listdir(job['input_directory']):
-            file_path = os.path.join(job['input_directory'], filename)
-            if os.path.isfile(file_path):
-                # Add the file to the list only if it is a regular file
-                files.append(filename)
-        # Sort the list of files by name
-        sorted_files = sorted(files)
-        partitions_files = [[] for _ in range(job['num_mappers'])]
-        for i, file_name in enumerate(sorted_files):
-            mapper_index = i % job['num_mappers']
-            partitions_files[mapper_index].append(file_name)
-        for j in range(len(partitions_files)):
-            for worker_id in self.workers:
-                if self.workers[worker_id]['status'] == "ready":
-                    self.workers[worker_id]['current_task'] = j
-                    self.workers[worker_id]['status'] = "busy"
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                        worker_host, worker_port = worker_id
-                        sock.connect((worker_host, worker_port))
-                        input_paths = []
-                        for file in partitions_files[j]:
-                            input_paths.append(str(job['input_directory']) + '/' + str(file))
-                        context = {
-                                    "message_type": "new_map_task",
-                                    "task_id": j,
-                                    "input_paths": input_paths,
-                                    "executable": job['mapper_executable'],
-                                    "output_directory": tmpdir,
-                                    "num_partitions": job['num_reducers']
-                                }
-                        message = json.dumps(context)
-                        sock.sendall(message.encode('utf-8'))
-                        print(f"ASSIGNED Task ID {j} to Worker {worker_id}")
-                        print(f"j = {j}")
-                    break
+    def send_tasks(self, job, partitions_files, tmpdir, task_id):
+        #for j in range(len(partitions_files)):
+        for worker_id in self.workers:
+            if self.workers[worker_id]['status'] == "ready":
+                self.workers[worker_id]['current_task'] = task_id
+                self.workers[worker_id]['status'] = "busy"
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    worker_host, worker_port = worker_id
+                    sock.connect((worker_host, worker_port))
+                    input_paths = []
+                    for file in partitions_files[0]:
+                        input_paths.append(str(job['input_directory']) + '/' + str(file))
+                    context = {
+                                "message_type": "new_map_task",
+                                "task_id": task_id,
+                                "input_paths": input_paths,
+                                "executable": job['mapper_executable'],
+                                "output_directory": tmpdir,
+                                "num_partitions": job['num_reducers']
+                            }
+                    message = json.dumps(context)
+                    sock.sendall(message.encode('utf-8'))
+                partitions_files.pop(0)
+                break
 
 
 

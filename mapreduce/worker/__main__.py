@@ -7,6 +7,9 @@ import click
 import mapreduce.utils
 import socket
 import threading
+import tempfile
+import hashlib
+import subprocess
 
 
 # Configure logging
@@ -34,6 +37,7 @@ class Worker:
 
 
         thread_tcp_server = threading.Thread(target = self.worker_tcp_server)
+        thread_tcp_server.name = "worker_thread"
         thread_tcp_server.start()
 
         thread_tcp_server.join()
@@ -83,11 +87,63 @@ class Worker:
                     continue
                 LOGGER.info(message_dict)
 
-                if message_dict["message_type"] == "shutdown" :
-                    # 如果worker is busy， 先完成job再shutdown
+                if message_dict["message_type"] == "shutdown":
+                    # if worker is busy, shutdown after running job
                     self.signals["shutdown"] = True
                     break
                 #  else do work
+                elif message_dict["message_type"] == "new_map_task":
+                    map_task = message_dict["message_type"]
+                    self.mapper_worker(map_task)
+
+
+    def mapper_worker(self, map_task):
+        task_id = map_task['task_id']
+        map_executable = map_task['executable']
+        input_paths = map_task['input_paths']
+        shared_dir = map_task['output_directory']
+        num_partitions = map_task['num_partitions']
+        # create directory local to worker
+        prefix = f"mapreduce-local-task{task_id:05d}-"
+        with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
+            LOGGER.info("Created local tmpdir %s", tmpdir)
+            # run executable on each file
+            for input_path in input_paths:
+                mapper_command = f"{map_executable} {input_path}"
+                output = subprocess.run(mapper_command, shell=True, capture_output=True, text=True)
+                print(output)
+                for line in output.stdout.splitlines():
+                    # partition
+                    key, value = line.decode('utf-8').split('\t', 1)
+                    hexdigest = hashlib.md5(key.encode("utf-8")).hexdigest()
+                    keyhash = int(hexdigest, base=16)
+                    partition_number = keyhash % num_partitions
+                    output_path = os.path.join(tmpdir, f"maptask{task_id:05d}-part{partition_number:05d}")
+                    
+                    with open(output_path, 'w') as file:
+                        file.write(line.decode('utf-8') + '\n') # write key value pair into part
+                    
+        LOGGER.info("Cleaned up tmpdir %s", tmpdir)
+        
+    
+        
+
+
+        
+        
+        
+    
+
+            
+        #{
+        # "message_type": "new_map_task",
+        # "task_id": int,
+        # "input_paths": [list of strings],
+        # "executable": string,
+        # "output_directory": string,
+        # "num_partitions": int,
+        # }
+                            
                     
     def worker_tcp_ack(self):
         """Send a registration message to the Manager."""
@@ -100,6 +156,7 @@ class Worker:
             })
             sock.sendall(message.encode('utf-8'))
             LOGGER.info("Sent register message to Manager")
+            
 
 
 
@@ -122,7 +179,6 @@ def main(host, port, manager_host, manager_port, logfile, loglevel):
     root_logger.addHandler(handler)
     root_logger.setLevel(loglevel.upper())
     Worker(host, port, manager_host, manager_port)
-
 
 if __name__ == "__main__":
     main()
