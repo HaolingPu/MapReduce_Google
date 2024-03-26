@@ -99,7 +99,7 @@ class Worker:
 
 
     def mapper_worker(self, map_task):
-        task_id = int(map_task['task_id'])
+        task_id = map_task['task_id']
         map_executable = map_task['executable']
         input_paths = map_task['input_paths']
         shared_dir = map_task['output_directory']
@@ -110,28 +110,28 @@ class Worker:
             LOGGER.info("Created local tmpdir %s", tmpdir)
             partition_files = {}  # Track open file descriptors
             # run executable on each file
-            # run executable on each file
             for input_path in input_paths:
                 with open(input_path, 'r') as infile:
-                    process = subprocess.Popen(
+                    with subprocess.Popen(
                         [map_executable],
                         stdin=infile,
                         stdout=subprocess.PIPE,
                         text=True
-                    )
-                for line in process.stdout:
-                    # partition
-                    key, value = line.split('\t', 1)
-                    hexdigest = hashlib.md5(key.encode("utf-8")).hexdigest()
-                    keyhash = int(hexdigest, base=16)
-                    partition_number = keyhash % num_partitions
-                    partition_path = os.path.join(tmpdir, f"maptask{task_id:05d}-part{partition_number:05d}")
-                    #如果没有才需要加这个 direction
-                    if partition_path not in partition_files:
-                        partition_files[partition_path] = open(partition_path, 'a')
-                    partition_files[partition_path].write(line)
-                    # with open(partition_path, 'w') as file:
-                    #     file.write(line.decode('utf-8') + '\n') # write key value pair into part
+                    ) as process:
+                        for line in process.stdout:
+                            # partition
+                            key, value = line.split('\t', 1)
+                            hexdigest = hashlib.md5(key.encode("utf-8")).hexdigest()
+                            keyhash = int(hexdigest, base=16)
+                            partition_number = keyhash % num_partitions
+                            partition_path = os.path.join(tmpdir, f"maptask{task_id:05d}-part{partition_number:05d}")
+                            #如果没有才需要加这个 direction
+                            if partition_path not in partition_files:
+                                partition_files[partition_path] = open(partition_path, 'a')
+                            partition_files[partition_path].write(line)
+                            # with open(partition_path, 'w') as file:
+                            #     file.write(line.decode('utf-8') + '\n') # write key value pair into part
+                            
             for f in partition_files.values():
                 f.close()
                 # Sort and move files to shared directory
