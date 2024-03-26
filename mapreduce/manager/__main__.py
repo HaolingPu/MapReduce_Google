@@ -86,7 +86,7 @@ class Manager:
                 # Decode list-of-byte-strings to UTF8 and parse JSON data
                 message_bytes = b''.join(message_chunks)
                 message_str = message_bytes.decode("utf-8")
-                print("???", message_str)
+                print("Shutdown Message: ", message_str)
                 try:
                     message_dict = json.loads(message_str)
                 except json.JSONDecodeError:
@@ -177,28 +177,42 @@ class Manager:
 
                 # Create a shared directory for temporary intermediate files
                 prefix = f"mapreduce-shared-job{job['job_id']:05d}-" 
-                # prefix = f"mapreduce-shared-job{self.job_id:05d}-"
                 with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
                     LOGGER.info("Created tmpdir %s", tmpdir)
-                    # Change this loop so that it runs either until shutdown or when the job is completed.
-                    task_id = 0
-                    while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
+                    task_map_id = 0
+                    # run mapping job
+                    while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers']):
                         if partitions_files:
                             length = len(partitions_files)
-                            self.send_tasks(job, partitions_files, tmpdir, task_id)
+                            self.send_mapping_tasks(job, partitions_files, tmpdir, task_map_id)
                             if len(partitions_files) == length - 1:
-                                task_id += 1
+                                task_map_id += 1
+                        time.sleep(0.1)
+
+                    # create reduce tasks
+                    # partition_file {t0, t1, t2, t0, t2, t1}
+                    # => {t0, t0}, {t1, t1}, {t2, t2}
+                    reduce_tasks = [[] for _ in range(job['num_reducers'])]
+                    for partition_file in os.listdir(tmpdir):
+                        task_reduce_id = int(filename.split('-')[-1].replace("part", ""))
+                        file_path = os.path.join(tmpdir, partition_file)
+                        reduce_tasks[task_reduce_id].append(file_path)
+
+                    # run reducing job
+                    while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
+                        self.send_reducing_tasks(job, reduce_tasks, tmpdir, task_reduce_id)
+
+
                         time.sleep(0.1)
                 LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
             except queue.Empty:
                 # No job was available in the queue
                 pass
-    def send_tasks(self, job, partitions_files, tmpdir, task_id):
-        #for j in range(len(partitions_files)):
+    def send_mapping_tasks(self, job, partitions_files, tmpdir, task_map_id):
         for worker_id in self.workers:
             if self.workers[worker_id]['status'] == "ready":
-                self.workers[worker_id]['current_task'] = task_id
+                self.workers[worker_id]['current_task'] = task_map_id
                 self.workers[worker_id]['status'] = "busy"
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     worker_host, worker_port = worker_id
@@ -208,7 +222,7 @@ class Manager:
                         input_paths.append(str(job['input_directory']) + '/' + str(file))
                     context = {
                                 "message_type": "new_map_task",
-                                "task_id": task_id,
+                                "task_id": task_map_id,
                                 "input_paths": input_paths,
                                 "executable": job['mapper_executable'],
                                 "output_directory": tmpdir,
@@ -220,6 +234,25 @@ class Manager:
                 break
 
 
+    def send_reducing_tasks(self, job, reduce_tasks, tmpdir, task_reduce_id):
+        for worker_id in self.workers:
+            if self.workers[worker_id]['status'] == "ready":
+                self.workers[worker_id]['current_task'] = task_reduce_id
+                self.workers[worker_id]['status'] = "busy"
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    worker_host, worker_port = worker_id
+                    sock.connect((worker_host, worker_port))
+                    context = {
+                                "message_type": "new_reduce_task",
+                                "task_id": task_reduce_id,
+                                "executable": job['reducer_executable'],
+                                "input_paths": reduce_tasks[0],
+                                "output_directory": tmpdir,
+                            }
+                    message = json.dumps(context)
+                    sock.sendall(message.encode('utf-8'))
+                reduce_tasks.pop(0)
+                break
 
 @click.command()
 @click.option("--host", "host", default="localhost")
