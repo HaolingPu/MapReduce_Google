@@ -11,6 +11,7 @@ import tempfile
 import hashlib
 import subprocess
 import shutil
+import heapq
 
 
 # Configure logging
@@ -96,6 +97,9 @@ class Worker:
                 elif message_dict["message_type"] == "new_map_task":
                     self.mapper_worker(message_dict)
                     self.send_finished_message(message_dict['task_id'])
+                elif message_dict["message_type"] == "new_reduce_task":
+                    self.reducer_worker(message_dict)
+                    self.send_finished_message(message_dict['task_id'])
 
 
     def mapper_worker(self, map_task):
@@ -158,6 +162,49 @@ class Worker:
             message_str = json.dumps(finished_message)
             sock.sendall(message_str.encode('utf-8'))
         LOGGER.info(f"Sent 'finished' message for task {task_id}.")
+
+
+    def reducer_worker(self, reduce_task):
+        task_id = reduce_task["task_id"]
+        reduce_executable = reduce_task['executable']
+        input_paths = reduce_task['input_paths'] # a list of paths
+        output_dir = reduce_task['output_directory']
+        
+        prefix = f"mapreduce-local-task{task_id:05d}-"
+        with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
+            LOGGER.info("Created local tmpdir %s", tmpdir)
+            # merge sort first
+            #create the output destination
+            dir_path, filename = os.path.split(input_paths[0])
+            part_num = filename.split('-')[-1]
+            output_path = os.path.join(tmpdir, f"part-{part_num}" )
+            with open(output_path, 'w') as output_file:
+                input_files = []
+                for file in input_paths:
+                    input_files.append(open(file))
+                instream_path = os.path.join(tmpdir, "merged_output.txt")
+                with open(instream_path, 'w') as instream_file:
+                    for line in heapq.merge(*input_files):
+                        instream_file.write(line)  # this is a file
+                # run reduce excutable
+                    with subprocess.Popen(
+                        [reduce_executable],
+                        text=True,
+                        stdin=subprocess.PIPE,
+                        stdout=output_file
+                    ) as reduce_process:
+                        # Pipe input to reduce_process
+                        for line in instream_file: ########WHY########
+                            reduce_process.stdin.write(line)
+                
+                print(output_file)
+
+            # Move to shared directory[]
+            shutil.move(output_path, os.path.join(output_dir, f"part-{part_num}"))
+
+        LOGGER.info("Cleaned up tmpdir %s", tmpdir)
+
+
         
                             
                     

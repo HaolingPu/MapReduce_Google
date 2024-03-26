@@ -190,18 +190,18 @@ class Manager:
                         time.sleep(0.1)
 
                     # create reduce tasks
-                    # partition_file {t0, t1, t2, t0, t2, t1}
-                    # => {t0, t0}, {t1, t1}, {t2, t2}
                     reduce_tasks = [[] for _ in range(job['num_reducers'])]
-                    for partition_file in os.listdir(tmpdir):
-                        task_reduce_id = int(filename.split('-')[-1].replace("part", ""))
+                    for partition_file in os.listdir(tmpdir):  # partition file is "123.txt"
+                        task_reduce_id = int(partition_file[-5:])
                         file_path = os.path.join(tmpdir, partition_file)
                         reduce_tasks[task_reduce_id].append(file_path)
 
                     # run reducing job
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
-                        self.send_reducing_tasks(job, reduce_tasks, tmpdir, task_reduce_id)
-
+                        length = len(reduce_tasks)
+                        self.send_reducing_tasks(job, reduce_tasks)
+                        if len(reduce_tasks) == length - 1:
+                            task_reduce_id += 1
 
                         time.sleep(0.1)
                 LOGGER.info("Cleaned up tmpdir %s", tmpdir)
@@ -234,11 +234,12 @@ class Manager:
                 break
 
 
-    def send_reducing_tasks(self, job, reduce_tasks, tmpdir, task_reduce_id):
+    def send_reducing_tasks(self, job, reduce_tasks):
         for worker_id in self.workers:
             if self.workers[worker_id]['status'] == "ready":
                 self.workers[worker_id]['current_task'] = task_reduce_id
                 self.workers[worker_id]['status'] = "busy"
+                task_reduce_id = int(reduce_tasks[-5:])
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     worker_host, worker_port = worker_id
                     sock.connect((worker_host, worker_port))
@@ -247,12 +248,14 @@ class Manager:
                                 "task_id": task_reduce_id,
                                 "executable": job['reducer_executable'],
                                 "input_paths": reduce_tasks[0],
-                                "output_directory": tmpdir,
+                                "output_directory": job['output_directory'],
                             }
                     message = json.dumps(context)
                     sock.sendall(message.encode('utf-8'))
                 reduce_tasks.pop(0)
                 break
+
+
 
 @click.command()
 @click.option("--host", "host", default="localhost")
