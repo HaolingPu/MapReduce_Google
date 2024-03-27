@@ -191,6 +191,7 @@ class Manager:
 
                     # create reduce tasks
                     reduce_tasks = [[] for _ in range(job['num_reducers'])]
+                    print("okok", os.listdir(tmpdir))
                     for partition_file in os.listdir(tmpdir):  # partition file is "123.txt"
                         task_reduce_id = int(partition_file[-5:])
                         file_path = os.path.join(tmpdir, partition_file)
@@ -237,9 +238,12 @@ class Manager:
     def send_reducing_tasks(self, job, reduce_tasks):
         for worker_id in self.workers:
             if self.workers[worker_id]['status'] == "ready":
-                self.workers[worker_id]['current_task'] = task_reduce_id
+                # self.workers[worker_id]['current_task'] = task_reduce_id
                 self.workers[worker_id]['status'] = "busy"
-                task_reduce_id = int(reduce_tasks[-5:])
+                extract_id = reduce_tasks[0][0]
+                task_reduce_id = int(extract_id[-5:])
+                LOGGER.info("HEY there")
+                LOGGER.info(reduce_tasks[0])
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     worker_host, worker_port = worker_id
                     sock.connect((worker_host, worker_port))

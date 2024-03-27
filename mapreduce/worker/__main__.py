@@ -135,7 +135,6 @@ class Worker:
                             partition_files[partition_path].write(line)
                             # with open(partition_path, 'w') as file:
                             #     file.write(line.decode('utf-8') + '\n') # write key value pair into part
-                            
             for f in partition_files.values():
                 f.close()
                 # Sort and move files to shared directory
@@ -144,7 +143,8 @@ class Worker:
                 # Sort file
                 subprocess.run(['sort', '-o',file_path, file_path], check = True)
                 # Move to shared directory
-                shutil.move(file_path, os.path.join(shared_dir, partitionfiles))
+                shutil.move(file_path, shared_dir)
+                # os.path.join(shared_dir, partitionfiles
 
         LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
@@ -173,34 +173,31 @@ class Worker:
         prefix = f"mapreduce-local-task{task_id:05d}-"
         with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
             LOGGER.info("Created local tmpdir %s", tmpdir)
-            # merge sort first
             #create the output destination
-            dir_path, filename = os.path.split(input_paths[0])
-            part_num = filename.split('-')[-1]
+            part_num = input_paths[0][-5:]
             output_path = os.path.join(tmpdir, f"part-{part_num}" )
+
             with open(output_path, 'w') as output_file:
+                # a list of file for heap merge
                 input_files = []
                 for file in input_paths:
                     input_files.append(open(file))
-                instream_path = os.path.join(tmpdir, "merged_output.txt")
-                with open(instream_path, 'w') as instream_file:
-                    for line in heapq.merge(*input_files):
-                        instream_file.write(line)  # this is a file
-                # run reduce excutable
-                    with subprocess.Popen(
+
+                with subprocess.Popen(
                         [reduce_executable],
                         text=True,
                         stdin=subprocess.PIPE,
                         stdout=output_file
                     ) as reduce_process:
                         # Pipe input to reduce_process
-                        for line in instream_file: ########WHY########
+                        for line in heapq.merge(*input_files):
                             reduce_process.stdin.write(line)
-                
-                print(output_file)
+
+            for file in input_files:
+                file.close()
 
             # Move to shared directory[]
-            shutil.move(output_path, os.path.join(output_dir, f"part-{part_num}"))
+            shutil.move(output_path, output_dir)
 
         LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
