@@ -12,6 +12,8 @@ import hashlib
 import subprocess
 import shutil
 import heapq
+import contextlib
+from contextlib import ExitStack
 
 
 # Configure logging
@@ -40,9 +42,12 @@ class Worker:
 
         thread_tcp_server = threading.Thread(target = self.worker_tcp_server)
         thread_tcp_server.name = "worker_thread"
+        worker_udp_client = threading.Thread(target = self.worker_udp_client)
         thread_tcp_server.start()
+        worker_udp_client.start()
 
         thread_tcp_server.join()
+        worker_udp_client.join()
 
 
     def worker_tcp_server(self):
@@ -100,6 +105,21 @@ class Worker:
                 elif message_dict["message_type"] == "new_reduce_task":
                     self.reducer_worker(message_dict)
                     self.send_finished_message(message_dict['task_id'])
+
+
+    def worker_udp_client(self):
+        """send heartbeat every 2 seconds"""
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            # Connect to the UDP socket on server
+            sock.connect((self.manager_host, self.manager_port))
+            context = {
+                    "message_type": "heartbeat",
+                    "worker_host": self.host,
+                    "worker_port": self.port
+            }
+            message = json.dumps(context)
+            sock.sendall(message.encode('utf-8'))
+            time.sleep(2)
 
 
     def mapper_worker(self, map_task):
@@ -176,7 +196,8 @@ class Worker:
             #create the output destination
             part_num = input_paths[0][-5:]
             output_path = os.path.join(tmpdir, f"part-{part_num}" )
-
+        # with ExitStack() as Stack:
+            
             with open(output_path, 'w') as output_file:
                 # a list of file for heap merge
                 input_files = []
@@ -216,7 +237,7 @@ class Worker:
             })
             sock.sendall(message.encode('utf-8'))
             LOGGER.info("Sent register message to Manager")
-            
+    
 
 
 

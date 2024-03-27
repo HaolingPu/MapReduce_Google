@@ -17,6 +17,8 @@ from pathlib import Path
 # Configure logging
 LOGGER = logging.getLogger(__name__)
 
+# 1. should I create another queue for reassign tasks?
+# 2. 如果send shutdown message 遇到了connectionerror 怎么办？ mark as dead吗？
 
 class Manager:
     """Represent a MapReduce framework Manager node."""
@@ -30,17 +32,20 @@ class Manager:
         self.job_queue = queue.Queue()
         self.job_count = 0
         self.finished_job_tasks = 0
+        self.current_task = []
 
 
         thread_tcp_server = threading.Thread(target = self.manager_tcp_server)
         thread_tcp_server.name = "manager_tcp_server"
         thread_udp_server = threading.Thread(target = self.manager_udp_server)
         thread_udp_server.name = "manager_udp_server"
+        
         thread_fault_tolerance = threading.Thread(target = self.fault_tolerance_thread)
         
         
         thread_tcp_server.start()
         thread_udp_server.start()
+
         thread_fault_tolerance.start()
 
         # formatter = logging.Formatter(
@@ -52,7 +57,7 @@ class Manager:
         self.run_job()
         thread_tcp_server.join()
         thread_udp_server.join()
-        thread_fault_tolerance.join()
+        # thread_fault_tolerance.join()
         
         LOGGER.info(
             "Starting manager host=%s port=%s pwd=%s",
@@ -122,16 +127,23 @@ class Manager:
                     LOGGER.info("Manager shut down!")
                     break
 
-                elif message_dict["message_type"] == "register":
+                elif message_dict["message_type"] == "register":  # check the dead worker alive now
                     worker_id = (message_dict["worker_host"], message_dict["worker_port"])
                     worker_host, worker_port = worker_id
-                    self.workers[worker_id] = {
-                        "status": "ready", # ready, busy, dead
-                        "current_task_id": None,
-                        "current_task_stage": None,
-                        "last_ping": time.time()
-                    }
-                    LOGGER.info(f"Worker registered: {worker_id}")
+                    if worker_id in self.workers:
+                        if self.workers[worker_id]["status"] == "dead" :
+                            self.workers[worker_id]["status"] == "ready"
+                        elif self.workers[worker_id]["status"] == "busy":
+                            # reassign task 
+                            self.workers[worker_id]["status"] == "ready" # !!!!!!!
+                    else:
+                        self.workers[worker_id] = {
+                            "status": "ready", # ready, busy, dead
+                            "current_task_id": None,
+                            "current_task_stage": None,
+                            "last_ping": time.time()
+                        }
+                        LOGGER.info(f"Worker registered: {worker_id}")
                     try:
                         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                                 # connect to the server
@@ -182,17 +194,18 @@ class Manager:
                     worker_port = message_dict["worker_port"]
                     worker_id = (worker_host, worker_port)
                     # update last ping
-                    # potential use of lock
+                    # ??? potential use of lock
                     self.workers[worker_id]["last_ping"] = time.time()
                     # update the worker status if it was dead
                     if self.workers[worker_id]["status"] == "dead": 
                         self.workers[worker_id]["status"] = "ready"
                         LOGGER.info(f"Worker {worker_id} is alive again!")
                 
+
     def fault_tolerance_thread (self):
         while not self.signals["shutdown"]:
             for worker in self.workers:
-                if time.time() - worker["last_ping"] > 10 or worker["status"] = "dead": # the worker is dead
+                if time.time() - worker["last_ping"] > 10 or worker["status"] == "dead": # the worker is dead
                     if worker["status"] == "busy":
                         worker["status"] = "dead"
                         task_id = worker["current_task_id"]
@@ -203,6 +216,7 @@ class Manager:
                             self.send_reducing_tasks(self, job, reduce_tasks)
                     worker["current_task_id"] = None
                     worker["current_task_stage"] = None
+        time.sleep(0.1)
 
         
                         
@@ -219,10 +233,10 @@ class Manager:
                         files.append(filename)
                 # Sort the list of files by name
                 sorted_files = sorted(files)
-                partitions_files = [[] for _ in range(job['num_mappers'])]
+                self.current_task = [[] for _ in range(job['num_mappers'])]
                 for i, file_name in enumerate(sorted_files):
                     mapper_index = i % job['num_mappers']
-                    partitions_files[mapper_index].append(file_name)
+                    self.current_task[mapper_index].append(file_name)
 
                     
                 LOGGER.info(f"Starting job {job['job_id']}")
@@ -243,26 +257,26 @@ class Manager:
                     task_map_id = 0
                     # run mapping job
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers']):
-                        if partitions_files:
-                            length = len(partitions_files)
-                            self.send_mapping_tasks(job, partitions_files, tmpdir, task_map_id)
-                            if len(partitions_files) == length - 1:
+                        if self.current_task:
+                            length = len(self.current_task)
+                            self.send_mapping_tasks(job, tmpdir, task_map_id)
+                            if len(self.current_task) == length - 1:
                                 task_map_id += 1
                         time.sleep(0.1)
 
-                    # create reduce tasks
-                    reduce_tasks = [[] for _ in range(job['num_reducers'])]
-                    print("okok", os.listdir(tmpdir))
-                    for partition_file in os.listdir(tmpdir):  # partition file is "123.txt"
+                    # create reduce tasks, this is overwritten by a new empty list
+                    self.current_task = [[] for _ in range(job['num_reducers'])]
+                    sorted_dir = sorted(os.listdir(tmpdir))
+                    for partition_file in sorted_dir:  # partition file is "123.txt"
                         task_reduce_id = int(partition_file[-5:])
                         file_path = os.path.join(tmpdir, partition_file)
-                        reduce_tasks[task_reduce_id].append(file_path)
+                        self.current_task[task_reduce_id].append(file_path)
 
                     # run reducing job
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
-                        length = len(reduce_tasks)
-                        self.send_reducing_tasks(job, reduce_tasks)
-                        if len(reduce_tasks) == length - 1:
+                        length = len(self.current_task)
+                        self.send_reducing_tasks(job)
+                        if len(self.current_task) == length - 1:
                             task_reduce_id += 1
 
                         time.sleep(0.1)
@@ -274,7 +288,9 @@ class Manager:
             except ConnectionRefusedError:
                 self.workers["worker_id"]["status"] = "dead"
                 LOGGER.info("ConnectionRefusedError")
-    def send_mapping_tasks(self, job, partitions_files, tmpdir, task_map_id):
+
+
+    def send_mapping_tasks(self, job, tmpdir, task_map_id):
         for worker_id in self.workers:
             if self.workers[worker_id]['status'] == "ready":
                 self.workers[worker_id]['current_task_id'] = task_map_id
@@ -284,7 +300,7 @@ class Manager:
                     worker_host, worker_port = worker_id
                     sock.connect((worker_host, worker_port))
                     input_paths = []
-                    for file in partitions_files[0]:
+                    for file in self.current_task[0]:
                         input_paths.append(str(job['input_directory']) + '/' + str(file))
                     context = {
                                 "message_type": "new_map_task",
@@ -296,20 +312,20 @@ class Manager:
                             }
                     message = json.dumps(context)
                     sock.sendall(message.encode('utf-8'))
-                partitions_files.pop(0)
+                self.current_task.pop(0)
                 break
 
 
-    def send_reducing_tasks(self, job, reduce_tasks):
+    def send_reducing_tasks(self, job):
         for worker_id in self.workers:
             if self.workers[worker_id]['status'] == "ready":
-                extract_id = reduce_tasks[0][0]
+                extract_id = self.current_task[0][0]
                 task_reduce_id = int(extract_id[-5:])
                 self.workers[worker_id]['current_task_id'] = task_reduce_id
                 self.workers[worker_id]['current_task_stage'] = "reducing"
                 self.workers[worker_id]['status'] = "busy"
                 LOGGER.info("HEY there")
-                LOGGER.info(reduce_tasks[0])
+                LOGGER.info(self.current_task[0])
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     worker_host, worker_port = worker_id
                     sock.connect((worker_host, worker_port))
@@ -317,12 +333,12 @@ class Manager:
                                 "message_type": "new_reduce_task",
                                 "task_id": task_reduce_id,
                                 "executable": job['reducer_executable'],
-                                "input_paths": reduce_tasks[0],
+                                "input_paths": self.current_task[0],
                                 "output_directory": job['output_directory'],
                             }
                     message = json.dumps(context)
                     sock.sendall(message.encode('utf-8'))
-                reduce_tasks.pop(0)
+                self.current_task.pop(0)
                 break
 
 
