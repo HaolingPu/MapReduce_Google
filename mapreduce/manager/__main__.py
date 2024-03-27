@@ -33,18 +33,26 @@ class Manager:
 
 
         thread_tcp_server = threading.Thread(target = self.manager_tcp_server)
-        thread_tcp_server.name = "manager_server"
+        thread_tcp_server.name = "manager_tcp_server"
+        thread_udp_server = threading.Thread(target = self.manager_udp_server)
+        thread_udp_server.name = "manager_udp_server"
+        thread_fault_tolerance = threading.Thread(target = self.fault_tolerance_thread)
+        
+        
         thread_tcp_server.start()
-        #thread_tcp_client = threading.Thread(target = self.manager_tcp_client)
-        #thread_tcp_client.start()
-        formatter = logging.Formatter(
-            f"Manager:{port}:%(threadName)s [%(levelname)s] %(message)s"
-        )
+        thread_udp_server.start()
+        thread_fault_tolerance.start()
+
+        # formatter = logging.Formatter(
+        #     f"Manager:{port}:%(threadName)s [%(levelname)s] %(message)s"
+        # )
 
         
 
         self.run_job()
         thread_tcp_server.join()
+        thread_udp_server.join()
+        thread_fault_tolerance.join()
         
         LOGGER.info(
             "Starting manager host=%s port=%s pwd=%s",
@@ -95,36 +103,45 @@ class Manager:
 
                 LOGGER.info("Received message: %s", message_dict)
 
-                if message_dict["message_type"] == "shutdown" :
+                if message_dict["message_type"] == "shutdown" :  #??如果send shutdown message 遇到了connectionerror 怎么办？ mark as dead吗？
                     # send the shutdown message to all the workers
                     for worker_id in self.workers:
                         worker_host, worker_port = worker_id
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                            # connect to the server
-                            sock.connect((worker_host, worker_port))
-                            # send a message
-                            message = json.dumps({"message_type": "shutdown"})
-                            sock.sendall(message.encode('utf-8'))
+                        try: 
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                                # connect to the server
+                                sock.connect((worker_host, worker_port))
+                                # send a message
+                                message = json.dumps({"message_type": "shutdown"})
+                                sock.sendall(message.encode('utf-8'))
+                        except ConnectionRefusedError:
+                            self.workers["worker_id"]["status"] = "dead"
+                            LOGGER.info("ConnectionRefusedError")
 
                     self.signals["shutdown"] = True
-                    break
                     LOGGER.info("Manager shut down!")
+                    break
 
                 elif message_dict["message_type"] == "register":
                     worker_id = (message_dict["worker_host"], message_dict["worker_port"])
                     worker_host, worker_port = worker_id
                     self.workers[worker_id] = {
-                        "status": "ready",
-                        "current_task": None
-                        # "last_ping": time.time()
+                        "status": "ready", # ready, busy, dead
+                        "current_task_id": None,
+                        "current_task_stage": None,
+                        "last_ping": time.time()
                     }
                     LOGGER.info(f"Worker registered: {worker_id}")
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                            # connect to the server
-                            sock.connect((worker_host, worker_port))
-                            ack_message = json.dumps({"message_type": "register_ack"})
-                            sock.sendall(ack_message.encode('utf-8'))
-                            LOGGER.info(f"Sent registration acknowledgment to worker {worker_id}.")
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                                # connect to the server
+                                sock.connect((worker_host, worker_port))
+                                ack_message = json.dumps({"message_type": "register_ack"})
+                                sock.sendall(ack_message.encode('utf-8'))
+                                LOGGER.info(f"Sent registration acknowledgment to worker {worker_id}.")
+                    except ConnectionRefusedError:
+                        self.workers["worker_id"]["status"] = "dead"
+                        LOGGER.info("ConnectionRefusedError")
                 elif message_dict["message_type"] == "new_manager_job":
                     job = {
                             "job_id": self.job_count,
@@ -143,13 +160,57 @@ class Manager:
                     self.finished_job_tasks += 1
                     self.workers[worker_id]['status'] = "ready"
                     #"task_id": int,
-          
+    
+    def manager_udp_server (self):
+            # Create an INET, DGRAM socket, this is UDP
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            # Bind the UDP socket to the server
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((self.host, self.port))
+            sock.settimeout(1)
+            # Receive incoming UDP messages
+            while not self.signals["shutdown"]:
+                try:
+                    message_bytes = sock.recv(4096)
+                except socket.timeout:
+                    continue
+                message_str = message_bytes.decode("utf-8")
+                message_dict = json.loads(message_str)
+                print(message_dict)
+                if message_dict["message_type"] == "heartbeat":
+                    worker_host = message_dict["worker_host"]
+                    worker_port = message_dict["worker_port"]
+                    worker_id = (worker_host, worker_port)
+                    # update last ping
+                    # potential use of lock
+                    self.workers[worker_id]["last_ping"] = time.time()
+                    # update the worker status if it was dead
+                    if self.workers[worker_id]["status"] == "dead": 
+                        self.workers[worker_id]["status"] = "ready"
+                        LOGGER.info(f"Worker {worker_id} is alive again!")
+                
+    def fault_tolerance_thread (self):
+        while not self.signals["shutdown"]:
+            for worker in self.workers:
+                if time.time() - worker["last_ping"] > 10 or worker["status"] = "dead": # the worker is dead
+                    if worker["status"] == "busy":
+                        worker["status"] = "dead"
+                        task_id = worker["current_task_id"]
+                        if worker["current_task_stage"] == "mapping":
+                            # send task in tcp
+                            self.send_mapping_tasks(self, job, partitions_files, tmpdir, task_map_id)  #?? 怎么pass in 这个parameter？
+                        elif:
+                            self.send_reducing_tasks(self, job, reduce_tasks)
+                    worker["current_task_id"] = None
+                    worker["current_task_stage"] = None
+
+        
                         
     def run_job(self):
         while not self.signals["shutdown"]:
             try:
                 # Wait for a job to be available in the queue or check periodically
-                job = self.job_queue.get(timeout=1)  # Adjust timeout as necessary
+                job = self.job_queue.get(timeout=0.1)  # Adjust timeout as necessary
                 files = []
                 for filename in os.listdir(job['input_directory']):
                     file_path = os.path.join(job['input_directory'], filename)
@@ -210,10 +271,14 @@ class Manager:
             except queue.Empty:
                 # No job was available in the queue
                 pass
+            except ConnectionRefusedError:
+                self.workers["worker_id"]["status"] = "dead"
+                LOGGER.info("ConnectionRefusedError")
     def send_mapping_tasks(self, job, partitions_files, tmpdir, task_map_id):
         for worker_id in self.workers:
             if self.workers[worker_id]['status'] == "ready":
-                self.workers[worker_id]['current_task'] = task_map_id
+                self.workers[worker_id]['current_task_id'] = task_map_id
+                self.workers[worker_id]['current_task_stage'] = "mapping"
                 self.workers[worker_id]['status'] = "busy"
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     worker_host, worker_port = worker_id
@@ -238,10 +303,11 @@ class Manager:
     def send_reducing_tasks(self, job, reduce_tasks):
         for worker_id in self.workers:
             if self.workers[worker_id]['status'] == "ready":
-                # self.workers[worker_id]['current_task'] = task_reduce_id
-                self.workers[worker_id]['status'] = "busy"
                 extract_id = reduce_tasks[0][0]
                 task_reduce_id = int(extract_id[-5:])
+                self.workers[worker_id]['current_task_id'] = task_reduce_id
+                self.workers[worker_id]['current_task_stage'] = "reducing"
+                self.workers[worker_id]['status'] = "busy"
                 LOGGER.info("HEY there")
                 LOGGER.info(reduce_tasks[0])
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
