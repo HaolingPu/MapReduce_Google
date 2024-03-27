@@ -33,6 +33,7 @@ class Manager:
         self.job_count = 0
         self.finished_job_tasks = 0
         self.current_task = []
+        self.copy_task = []
 
 
         thread_tcp_server = threading.Thread(target = self.manager_tcp_server)
@@ -120,7 +121,7 @@ class Manager:
                                 message = json.dumps({"message_type": "shutdown"})
                                 sock.sendall(message.encode('utf-8'))
                         except ConnectionRefusedError:
-                            self.workers["worker_id"]["status"] = "dead"
+                            self.workers[worker_id]["status"] = "dead"
                             LOGGER.info("ConnectionRefusedError")
 
                     self.signals["shutdown"] = True
@@ -128,22 +129,29 @@ class Manager:
                     break
 
                 elif message_dict["message_type"] == "register":  # check the dead worker alive now
+                    print("hahahaha")
                     worker_id = (message_dict["worker_host"], message_dict["worker_port"])
                     worker_host, worker_port = worker_id
                     if worker_id in self.workers:
                         if self.workers[worker_id]["status"] == "dead" :
                             self.workers[worker_id]["status"] == "ready"
+                            LOGGER.info(f"Recognize Dead worker{worker_id} is now alive")
                         elif self.workers[worker_id]["status"] == "busy":
                             # reassign task 
-                            self.workers[worker_id]["status"] == "ready" # !!!!!!!
+                            task_id = self.workers[worker_id]["current_task_id"]
+                            self.current_task.append(self.copy_task[task_id])
+                            self.workers[worker_id]["status"] == "ready"
+                            LOGGER.info(f"Unrecognized Dead worker{worker_id} is now alive")
+        
                     else:
                         self.workers[worker_id] = {
                             "status": "ready", # ready, busy, dead
                             "current_task_id": None,
-                            "current_task_stage": None,
-                            "last_ping": time.time()
+                            # "current_task_stage": None,
+                            "last_ping": None
                         }
-                        LOGGER.info(f"Worker registered: {worker_id}")
+                        print("66666", worker_id)
+                        LOGGER.info(f"New worker registered: {worker_id}")
                     try:
                         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                                 # connect to the server
@@ -152,8 +160,10 @@ class Manager:
                                 sock.sendall(ack_message.encode('utf-8'))
                                 LOGGER.info(f"Sent registration acknowledgment to worker {worker_id}.")
                     except ConnectionRefusedError:
-                        self.workers["worker_id"]["status"] = "dead"
+                        self.con_err_refuse(self, worker_id)
+                        
                         LOGGER.info("ConnectionRefusedError")
+
                 elif message_dict["message_type"] == "new_manager_job":
                     job = {
                             "job_id": self.job_count,
@@ -188,14 +198,16 @@ class Manager:
                     continue
                 message_str = message_bytes.decode("utf-8")
                 message_dict = json.loads(message_str)
-                print(message_dict)
+                print("3333", message_dict)
                 if message_dict["message_type"] == "heartbeat":
                     worker_host = message_dict["worker_host"]
                     worker_port = message_dict["worker_port"]
                     worker_id = (worker_host, worker_port)
+                    print("1111", worker_id)
                     # update last ping
-                    # ??? potential use of lock
+                    print("22222",self.workers)
                     self.workers[worker_id]["last_ping"] = time.time()
+                    
                     # update the worker status if it was dead
                     if self.workers[worker_id]["status"] == "dead": 
                         self.workers[worker_id]["status"] = "ready"
@@ -204,18 +216,15 @@ class Manager:
 
     def fault_tolerance_thread (self):
         while not self.signals["shutdown"]:
-            for worker in self.workers:
-                if time.time() - worker["last_ping"] > 10 or worker["status"] == "dead": # the worker is dead
-                    if worker["status"] == "busy":
-                        worker["status"] = "dead"
-                        task_id = worker["current_task_id"]
-                        if worker["current_task_stage"] == "mapping":
-                            # send task in tcp
-                            self.send_mapping_tasks(self, job, partitions_files, tmpdir, task_map_id)  #?? 怎么pass in 这个parameter？
-                        elif:
-                            self.send_reducing_tasks(self, job, reduce_tasks)
-                    worker["current_task_id"] = None
-                    worker["current_task_stage"] = None
+            for key in self.workers:
+                if time.time() - self.workers[key]["last_ping"] > 10 or self.workers[key]["status"] == "dead": # the worker is dead
+                    if self.workers[key]["status"] == "busy":
+                        self.workers[key]["status"] = "dead"
+                        task_id = self.workers[key]["current_task_id"]
+                        self.current_task.append(self.copy_task[task_id])
+
+                    self.workers[key]["current_task_id"] = None
+                    # worker["current_task_stage"] = None
         time.sleep(0.1)
 
         
@@ -264,6 +273,9 @@ class Manager:
                                 task_map_id += 1
                         time.sleep(0.1)
 
+
+                    self.copy_task.clear()
+                    self.current_task.clear()
                     # create reduce tasks, this is overwritten by a new empty list
                     self.current_task = [[] for _ in range(job['num_reducers'])]
                     sorted_dir = sorted(os.listdir(tmpdir))
@@ -285,62 +297,76 @@ class Manager:
             except queue.Empty:
                 # No job was available in the queue
                 pass
-            except ConnectionRefusedError:
-                self.workers["worker_id"]["status"] = "dead"
-                LOGGER.info("ConnectionRefusedError")
+        
 
 
     def send_mapping_tasks(self, job, tmpdir, task_map_id):
-        for worker_id in self.workers:
-            if self.workers[worker_id]['status'] == "ready":
-                self.workers[worker_id]['current_task_id'] = task_map_id
-                self.workers[worker_id]['current_task_stage'] = "mapping"
-                self.workers[worker_id]['status'] = "busy"
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                    worker_host, worker_port = worker_id
-                    sock.connect((worker_host, worker_port))
-                    input_paths = []
-                    for file in self.current_task[0]:
-                        input_paths.append(str(job['input_directory']) + '/' + str(file))
-                    context = {
-                                "message_type": "new_map_task",
-                                "task_id": task_map_id,
-                                "input_paths": input_paths,
-                                "executable": job['mapper_executable'],
-                                "output_directory": tmpdir,
-                                "num_partitions": job['num_reducers']
-                            }
-                    message = json.dumps(context)
-                    sock.sendall(message.encode('utf-8'))
-                self.current_task.pop(0)
-                break
+        try:
+            for worker_id in self.workers:
+                if self.workers[worker_id]['status'] == "ready":
+                    self.workers[worker_id]['current_task_id'] = task_map_id
+                    # self.workers[worker_id]['current_task_stage'] = "mapping"
+                    self.workers[worker_id]['status'] = "busy"
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                        worker_host, worker_port = worker_id
+                        sock.connect((worker_host, worker_port))
+                        input_paths = []
+                        for file in self.current_task[0]:
+                            input_paths.append(str(job['input_directory']) + '/' + str(file))
+                        context = {
+                                    "message_type": "new_map_task",
+                                    "task_id": task_map_id,
+                                    "input_paths": input_paths,
+                                    "executable": job['mapper_executable'],
+                                    "output_directory": tmpdir,
+                                    "num_partitions": job['num_reducers']
+                                }
+                        message = json.dumps(context)
+                        sock.sendall(message.encode('utf-8'))
+                    self.copy_task.append(self.current_task[0])
+                    self.current_task.pop(0)
+                    break
+        except ConnectionRefusedError:
+                self.workers[worker_id]["status"] = "dead"
+                LOGGER.info("ConnectionRefusedError")
 
 
     def send_reducing_tasks(self, job):
-        for worker_id in self.workers:
-            if self.workers[worker_id]['status'] == "ready":
-                extract_id = self.current_task[0][0]
-                task_reduce_id = int(extract_id[-5:])
-                self.workers[worker_id]['current_task_id'] = task_reduce_id
-                self.workers[worker_id]['current_task_stage'] = "reducing"
-                self.workers[worker_id]['status'] = "busy"
-                LOGGER.info("HEY there")
-                LOGGER.info(self.current_task[0])
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                    worker_host, worker_port = worker_id
-                    sock.connect((worker_host, worker_port))
-                    context = {
-                                "message_type": "new_reduce_task",
-                                "task_id": task_reduce_id,
-                                "executable": job['reducer_executable'],
-                                "input_paths": self.current_task[0],
-                                "output_directory": job['output_directory'],
-                            }
-                    message = json.dumps(context)
-                    sock.sendall(message.encode('utf-8'))
-                self.current_task.pop(0)
-                break
+        try:
+            for worker_id in self.workers:
+                if self.workers[worker_id]['status'] == "ready":
+                    extract_id = self.current_task[0][0]
+                    task_reduce_id = int(extract_id[-5:])
+                    self.workers[worker_id]['current_task_id'] = task_reduce_id
+                    # self.workers[worker_id]['current_task_stage'] = "reducing"
+                    self.workers[worker_id]['status'] = "busy"
+                    LOGGER.info("HEY there")
+                    LOGGER.info(self.current_task[0])
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                        worker_host, worker_port = worker_id
+                        sock.connect((worker_host, worker_port))
+                        context = {
+                                    "message_type": "new_reduce_task",
+                                    "task_id": task_reduce_id,
+                                    "executable": job['reducer_executable'],
+                                    "input_paths": self.current_task[0],
+                                    "output_directory": job['output_directory'],
+                                }
+                        message = json.dumps(context)
+                        sock.sendall(message.encode('utf-8'))
+                    self.copy_task.append(self.current_task[0])
+                    self.current_task.pop(0)
+                    break
+        except ConnectionRefusedError:
+                self.workers[worker_id]["status"] = "dead"
+                LOGGER.info("ConnectionRefusedError")
 
+    def con_err_refuse (self, worker_id):
+        if self.workers[worker_id]["status"] == "busy":
+            task_id = self.workers[worker_id]["current_task_id"]
+            self.current_task.append(self.copy_task[task_id])
+            
+        self.workers[worker_id]["status"] = "dead"
 
 
 @click.command()

@@ -15,6 +15,9 @@ import heapq
 import contextlib
 from contextlib import ExitStack
 
+# 1. line 97: AttributeError: 'function' object has no attribute 'start'? 
+# 2. when to start the worker's UDP thread and start to send heartbeat?
+# 3. how to initailize worker's "last_ping"  ?time.time()
 
 # Configure logging
 LOGGER = logging.getLogger(__name__)
@@ -44,10 +47,10 @@ class Worker:
         thread_tcp_server.name = "worker_thread"
         worker_udp_client = threading.Thread(target = self.worker_udp_client)
         thread_tcp_server.start()
-        worker_udp_client.start()
+    
 
         thread_tcp_server.join()
-        worker_udp_client.join()
+        # worker_udp_client.join()
 
 
     def worker_tcp_server(self):
@@ -93,8 +96,10 @@ class Worker:
                     LOGGER.error("Failed to decode JSON message.")
                     continue
                 LOGGER.info(message_dict)
+                if message_dict["message_type"] == "register_ack":
+                    self.worker_udp_client.start()
 
-                if message_dict["message_type"] == "shutdown":
+                elif message_dict["message_type"] == "shutdown":
                     # if worker is busy, shutdown after running job
                     self.signals["shutdown"] = True
                     break
@@ -105,21 +110,23 @@ class Worker:
                 elif message_dict["message_type"] == "new_reduce_task":
                     self.reducer_worker(message_dict)
                     self.send_finished_message(message_dict['task_id'])
+                
 
 
     def worker_udp_client(self):
         """send heartbeat every 2 seconds"""
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            # Connect to the UDP socket on server
-            sock.connect((self.manager_host, self.manager_port))
-            context = {
-                    "message_type": "heartbeat",
-                    "worker_host": self.host,
-                    "worker_port": self.port
-            }
-            message = json.dumps(context)
-            sock.sendall(message.encode('utf-8'))
-            time.sleep(2)
+        while not self.signals["shutdown"]:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                # Connect to the UDP socket on server
+                sock.connect((self.manager_host, self.manager_port))
+                context = {
+                        "message_type": "heartbeat",
+                        "worker_host": self.host,
+                        "worker_port": self.port
+                }
+                message = json.dumps(context)
+                sock.sendall(message.encode('utf-8'))
+                time.sleep(2)
 
 
     def mapper_worker(self, map_task):
