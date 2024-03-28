@@ -15,8 +15,8 @@ import heapq
 import contextlib
 from contextlib import ExitStack
 
-# 1. line 97: AttributeError: 'function' object has no attribute 'start'? 
-# 2. when to start the worker's UDP thread and start to send heartbeat?
+# 2. self.worker  is not inserted!
+# 3. I have infinite loop for the fault tolarance. WHY?
 # 3. how to initailize worker's "last_ping"  ?time.time()
 
 # Configure logging
@@ -48,7 +48,7 @@ class Worker:
         thread_tcp_server.name = "worker_thread"
         worker_udp_client = threading.Thread(target = self.worker_udp_client)
         thread_tcp_server.start()
-
+        # while not self.signals["shutdown"]:
         if self.send_heartbeat == True:
             worker_udp_client.start() 
             worker_udp_client.join()
@@ -100,6 +100,7 @@ class Worker:
                     LOGGER.error("Failed to decode JSON message.")
                     continue
                 LOGGER.info(message_dict)
+
                 if message_dict["message_type"] == "register_ack":
                     # use a flag here
                     self.send_heartbeat = True
