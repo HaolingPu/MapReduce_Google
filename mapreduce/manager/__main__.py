@@ -17,8 +17,8 @@ from pathlib import Path
 # Configure logging
 LOGGER = logging.getLogger(__name__)
 
-# 1. should I create another queue for reassign tasks?
-# 2. 如果send shutdown message 遇到了connectionerror 怎么办？ mark as dead吗？
+# 1. line 226
+# 2. line 209
 
 class Manager:
     """Represent a MapReduce framework Manager node."""
@@ -206,7 +206,7 @@ class Manager:
                     print("1111", worker_id)
                     # update last ping
                     print("22222",self.workers)
-                    self.workers[worker_id]["last_ping"] = time.time()
+                    self.workers[worker_id]["last_ping"] = None  # it looks like we don't have the worker yet. WHY?
                     
                     # update the worker status if it was dead
                     if self.workers[worker_id]["status"] == "dead": 
@@ -217,11 +217,13 @@ class Manager:
     def fault_tolerance_thread (self):
         while not self.signals["shutdown"]:
             for key in self.workers:
+                if self.workers[key]["last_ping"] is None:
+                    continue
                 if time.time() - self.workers[key]["last_ping"] > 10 or self.workers[key]["status"] == "dead": # the worker is dead
                     if self.workers[key]["status"] == "busy":
                         self.workers[key]["status"] = "dead"
                         task_id = self.workers[key]["current_task_id"]
-                        self.current_task.append(self.copy_task[task_id])
+                        self.current_task.append(self.copy_task[task_id])   # ?? potential risk "RuntimeError: dictionary changed size during iteration"
 
                     self.workers[key]["current_task_id"] = None
                     # worker["current_task_stage"] = None

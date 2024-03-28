@@ -41,16 +41,20 @@ class Worker:
         self.manager_host = manager_host
         self.manager_port = manager_port
         self.signals = {"shutdown": False}
+        self.send_heartbeat = False
 
 
         thread_tcp_server = threading.Thread(target = self.worker_tcp_server)
         thread_tcp_server.name = "worker_thread"
         worker_udp_client = threading.Thread(target = self.worker_udp_client)
         thread_tcp_server.start()
-    
+
+        if self.send_heartbeat == True:
+            worker_udp_client.start() 
+            worker_udp_client.join()
 
         thread_tcp_server.join()
-        # worker_udp_client.join()
+
 
 
     def worker_tcp_server(self):
@@ -97,7 +101,8 @@ class Worker:
                     continue
                 LOGGER.info(message_dict)
                 if message_dict["message_type"] == "register_ack":
-                    self.worker_udp_client.start()
+                    # use a flag here
+                    self.send_heartbeat = True
 
                 elif message_dict["message_type"] == "shutdown":
                     # if worker is busy, shutdown after running job
