@@ -49,11 +49,18 @@ class Worker:
         worker_udp_client = threading.Thread(target = self.worker_udp_client)
         thread_tcp_server.start()
         # while not self.signals["shutdown"]:
-        if self.send_heartbeat == True:
-            worker_udp_client.start() 
+        while not self.signals["shutdown"]:
+            if self.send_heartbeat == True:
+                worker_udp_client.start()
+                break
+            time.sleep(0.1)
+        
+        thread_tcp_server.join()
+
+        if worker_udp_client.is_alive():
             worker_udp_client.join()
 
-        thread_tcp_server.join()
+        
 
 
 
@@ -145,16 +152,17 @@ class Worker:
         prefix = f"mapreduce-local-task{task_id:05d}-"
         with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
             LOGGER.info("Created local tmpdir %s", tmpdir)
-            partition_files = {}  # Track open file descriptors
+            partition_files = {}  # Track file descriptors
             # run executable on each file
             for input_path in input_paths:
-                with open(input_path, 'r') as infile:
+                with ExitStack() as stack:
+                    infile = stack.enter_context(open(input_path, 'r'))
                     with subprocess.Popen(
                         [map_executable],
                         stdin=infile,
                         stdout=subprocess.PIPE,
                         text=True
-                    ) as process:
+                    ) as process: #############################TIME ISSUE #########################################
                         for line in process.stdout:
                             # partition
                             key, value = line.split('\t', 1)
@@ -162,12 +170,13 @@ class Worker:
                             keyhash = int(hexdigest, base=16)
                             partition_number = keyhash % num_partitions
                             partition_path = os.path.join(tmpdir, f"maptask{task_id:05d}-part{partition_number:05d}")
-                            #如果没有才需要加这个 direction
                             if partition_path not in partition_files:
-                                partition_files[partition_path] = open(partition_path, 'a')
+                                # with ExitStack() as stack:
+                                partition_files[partition_path] = open(partition_path, 'a') 
+                                    # changing to stack.enter_context makes the program stuck
+                                    # partition_files[partition_path] = stack.enter_context(open(partition_path, 'a'))
                             partition_files[partition_path].write(line)
-                            # with open(partition_path, 'w') as file:
-                            #     file.write(line.decode('utf-8') + '\n') # write key value pair into part
+
             for f in partition_files.values():
                 f.close()
                 # Sort and move files to shared directory
@@ -210,19 +219,19 @@ class Worker:
             part_num = input_paths[0][-5:]
             output_path = os.path.join(tmpdir, f"part-{part_num}" )
         # with ExitStack() as Stack:
-            
-            with open(output_path, 'w') as output_file:
+            with ExitStack() as stack:
+                output_file = stack.enter_context(open(output_path, 'w'))
                 # a list of file for heap merge
                 input_files = []
                 for file in input_paths:
-                    input_files.append(open(file))
+                    input_files.append(stack.enter_context(open(file, 'r')))
 
                 with subprocess.Popen(
                         [reduce_executable],
                         text=True,
                         stdin=subprocess.PIPE,
                         stdout=output_file
-                    ) as reduce_process:
+                    ) as reduce_process: #############################TIME ISSUE #########################################
                         # Pipe input to reduce_process
                         for line in heapq.merge(*input_files):
                             reduce_process.stdin.write(line)
@@ -243,7 +252,7 @@ class Worker:
         """Send a registration message to the Manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect((self.manager_host, self.manager_port))
-            message = json.dumps({      # 需要写 “finish”
+            message = json.dumps({
                 "message_type": "register",
                 "worker_host": self.host,
                 "worker_port": self.port

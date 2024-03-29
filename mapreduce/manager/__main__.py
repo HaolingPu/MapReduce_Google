@@ -12,6 +12,7 @@ import queue
 import shutil
 import hashlib
 from pathlib import Path
+from collections import OrderedDict
 
 
 # Configure logging
@@ -32,9 +33,8 @@ class Manager:
         self.job_queue = queue.Queue()
         self.job_count = 0
         self.finished_job_tasks = 0
-        self.current_task = []
-        self.copy_task = []
-        self.reassign_task = []
+        self.current_task = None
+        self.copy_task = None
 
 
         thread_tcp_server = threading.Thread(target = self.manager_tcp_server)
@@ -136,13 +136,24 @@ class Manager:
                     worker_host, worker_port = worker_id
                     if worker_id in self.workers:
                         if self.workers[worker_id]["status"] == "dead" :
-                            self.workers[worker_id]["status"] == "ready"
-                            LOGGER.info(f"Recognize Dead worker{worker_id} is now alive")
+                            self.workers[worker_id]["status"] = "ready"
+                            self.workers[worker_id]["current_stage"] = None
+                            LOGGER.info(f"Recognized Dead worker{worker_id} is now alive")
                         elif self.workers[worker_id]["status"] == "busy":
                             # reassign task 
                             task_id = self.workers[worker_id]["current_task_id"]
-                            self.current_task.append(self.copy_task[task_id])
-                            self.workers[worker_id]["status"] == "ready"
+                            # split into two cases
+                            self.append_failed_task(worker_id, task_id)
+                            # if (self.workers[worker_id]["current_stage"] == "mapping"):
+                            #     for sublist in self.copy_task:
+                            #         if sublist[0] == task_id:
+                            #             self.current_task.append(sublist)
+                            #             break
+                            #     self.current_task.append(self.copy_task[])
+                            # else:
+                            #     self.current_task.append(self.copy_task[task_id])
+                            self.workers[worker_id]["status"] = "ready"
+                            self.workers[worker_id]["current_stage"] = None
                             LOGGER.info(f"Unrecognized Dead worker{worker_id} is now alive")
         
                     else:
@@ -150,6 +161,7 @@ class Manager:
                         self.workers[worker_id] = {
                             "status": "ready", # ready, busy, dead
                             "current_task_id": None,
+                            "current_stage": None,
                             "last_ping": time.time()
                         }
                         print("LLL", self.workers[worker_id])
@@ -232,11 +244,11 @@ class Manager:
                         print("worker is dead")
                         self.workers[key]["status"] = "dead"
                         task_id = self.workers[key]["current_task_id"]
-                        self.current_task.append(self.copy_task[task_id])   # ?? potential risk "RuntimeError: dictionary changed size during iteration"
+                        self.append_failed_task(key, task_id)
                         print(self.current_task)
 
                     self.workers[key]["current_task_id"] = None
-                    # worker["current_task_stage"] = None
+                    self.workers[key]["current_stage"] = None
             time.sleep(0.1)
 
         
@@ -245,7 +257,7 @@ class Manager:
         while not self.signals["shutdown"]:
             try:
                 # Wait for a job to be available in the queue or check periodically
-                job = self.job_queue.get(timeout=0.1)  # Adjust timeout as necessary
+                job = self.job_queue.get()  # Adjust timeout as necessary
                 files = []
                 for filename in os.listdir(job['input_directory']):
                     file_path = os.path.join(job['input_directory'], filename)
@@ -254,14 +266,21 @@ class Manager:
                         files.append(filename)
                 # Sort the list of files by name
                 sorted_files = sorted(files)
-                self.current_task = [[] for _ in range(job['num_mappers'])]
+
+                # a list of tuples [[0,[]], [1,[]], ...]
+                self.current_task = [[j, []] for j in range(job['num_mappers'])]
+
                 for i, file_name in enumerate(sorted_files):
                     mapper_index = i % job['num_mappers']
-                    self.current_task[mapper_index].append(file_name)
+                    self.current_task[mapper_index][1].append(file_name)
+            
+                # self.current_task = [[] for _ in range(job['num_mappers'])]
+                # for i, file_name in enumerate(sorted_files):
+                #     mapper_index = i % job['num_mappers']
+                #     self.current_task[mapper_index].append(file_name)
 
                 self.copy_task = self.current_task
 
-                    
                 LOGGER.info(f"Starting job {job['job_id']}")
                 # delete output directory
                 output_directory = job["output_directory"]
@@ -277,16 +296,13 @@ class Manager:
                 prefix = f"mapreduce-shared-job{job['job_id']:05d}-" 
                 with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
                     LOGGER.info("Created tmpdir %s", tmpdir)
-                    task_map_id = 0
+
                     # run mapping job
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers']):
                         if self.current_task:
-
-                            task_map_id = self.send_mapping_tasks(job, tmpdir, task_map_id)
-                            
+                           self.send_mapping_tasks(job, tmpdir)                            
                         time.sleep(0.1)
-
-
+                    
                     self.copy_task.clear()
                     self.current_task.clear()
                     # create reduce tasks, this is overwritten by a new empty list
@@ -301,11 +317,11 @@ class Manager:
 
                     # run reducing job
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
-
                         self.send_reducing_tasks(job)
-
-
                         time.sleep(0.1)
+                    
+                    self.copy_task.clear()
+                    self.current_task.clear()
                 LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
             except queue.Empty:
@@ -314,21 +330,22 @@ class Manager:
         
 
 
-    def send_mapping_tasks(self, job, tmpdir, task_map_id):
-        try:
+    def send_mapping_tasks(self, job, tmpdir):
+        try: # a list of tuples [[0,[]], [1,[]], ...]
             for worker_id in self.workers:
                 if self.workers[worker_id]['status'] == "ready":
+                    task_map_id = self.current_task[0][0]
                     self.workers[worker_id]['current_task_id'] = task_map_id
                     print("LOL", task_map_id)
                     print("Current", self.current_task)
                     print("Copy", self.copy_task)
-                    # self.workers[worker_id]['current_task_stage'] = "mapping"
+                    self.workers[worker_id]['current_stage'] = "mapping"
                     self.workers[worker_id]['status'] = "busy"
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                         worker_host, worker_port = worker_id
                         sock.connect((worker_host, worker_port))
                         input_paths = []
-                        for file in self.current_task[0]:
+                        for file in self.current_task[0][1]: # the list of files for the first task
                             input_paths.append(str(job['input_directory']) + '/' + str(file))
                         context = {
                                     "message_type": "new_map_task",
@@ -340,10 +357,7 @@ class Manager:
                                 }
                         message = json.dumps(context)
                         sock.sendall(message.encode('utf-8'))
-
                     self.current_task.pop(0)
-                    task_map_id += 1
-                    return task_map_id 
                 
         except ConnectionRefusedError:
                 self.workers[worker_id]["status"] = "dead"
@@ -357,7 +371,7 @@ class Manager:
                     extract_id = self.current_task[0][0]
                     task_reduce_id = int(extract_id[-5:])
                     self.workers[worker_id]['current_task_id'] = task_reduce_id
-                    # self.workers[worker_id]['current_task_stage'] = "reducing"
+                    self.workers[worker_id]['current_stage'] = "reducing"
                     self.workers[worker_id]['status'] = "busy"
                     LOGGER.info("HEY there")
                     LOGGER.info(self.current_task[0])
@@ -382,9 +396,18 @@ class Manager:
     def con_err_refuse (self, worker_id):
         if self.workers[worker_id]["status"] == "busy":
             task_id = self.workers[worker_id]["current_task_id"]
-            self.current_task.append(self.copy_task[task_id])
-            
+            self.append_failed_task(worker_id, task_id)      
         self.workers[worker_id]["status"] = "dead"
+    
+
+    def append_failed_task(self, worker_id, task_id):
+        if (self.workers[worker_id]["current_stage"] == "mapping"):
+            for task in self.copy_task:
+                if task[0] == task_id:
+                    self.current_task.append(task)
+                    break
+        elif (self.workers[worker_id]["current_stage"] == "reducing"):
+            self.current_task.append(self.copy_task[task_id])
 
 
 @click.command()
