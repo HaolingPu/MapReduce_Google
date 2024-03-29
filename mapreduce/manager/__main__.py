@@ -58,6 +58,7 @@ class Manager:
                 self.run_job()
                 print("inside while", self.signals["shutdown"])
                 self.havejob = not self.job_queue.empty()
+                self.finished_job_tasks = 0
             time.sleep(0.1)
 
         
