@@ -19,8 +19,6 @@ import copy
 # Configure logging
 LOGGER = logging.getLogger(__name__)
 
-# 1. line 226
-# 2. line 209
 
 class Manager:
     """Represent a MapReduce framework Manager node."""
@@ -79,7 +77,7 @@ class Manager:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((self.host, self.port))
             sock.listen()
-            sock.settimeout(1)
+            sock.settimeout(0.1)
 
             LOGGER.info("TCP Server listening on %s:%s", self.host, self.port)
 
@@ -90,7 +88,7 @@ class Manager:
                     continue
                 LOGGER.info("Connection from %s", address[0])
 
-                clientsocket.settimeout(1)
+                clientsocket.settimeout(0.1)
 
                 with clientsocket:
                     message_chunks = []
@@ -210,7 +208,7 @@ class Manager:
             # Bind the UDP socket to the server
             sock3.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock3.bind((self.host, self.port))
-            sock3.settimeout(1)
+            sock3.settimeout(0.1)
             # Receive incoming UDP messages
             while not self.signals["shutdown"]:
                 try:
