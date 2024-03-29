@@ -250,15 +250,18 @@ class Worker:
                     
     def worker_tcp_ack(self):
         """Send a registration message to the Manager."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.connect((self.manager_host, self.manager_port))
-            message = json.dumps({
-                "message_type": "register",
-                "worker_host": self.host,
-                "worker_port": self.port
-            })
-            sock.sendall(message.encode('utf-8'))
-            LOGGER.info("Sent register message to Manager")
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.connect((self.manager_host, self.manager_port))
+                message = json.dumps({
+                    "message_type": "register",
+                    "worker_host": self.host,
+                    "worker_port": self.port
+                })
+                sock.sendall(message.encode('utf-8'))
+                LOGGER.info("Sent register message to Manager")
+        except ConnectionRefusedError:
+            LOGGER.info("ConnectionRefusedError")
     
 
 
