@@ -36,29 +36,32 @@ class Manager:
         self.finished_job_tasks = 0
         self.current_task = None
         self.copy_task = None
+        self.havejob = False
 
 
         thread_tcp_server = threading.Thread(target = self.manager_tcp_server)
         thread_tcp_server.name = "manager_tcp_server"
         thread_udp_server = threading.Thread(target = self.manager_udp_server)
         thread_udp_server.name = "manager_udp_server"
-        
         thread_fault_tolerance = threading.Thread(target = self.fault_tolerance_thread)
-        
         
         thread_tcp_server.start()
         thread_udp_server.start()
-
         thread_fault_tolerance.start()
 
         # formatter = logging.Formatter(
         #     f"Manager:{port}:%(threadName)s [%(levelname)s] %(message)s"
         # )
 
-        
+        while not self.signals["shutdown"]:
+            if self.havejob == True:
+                self.run_job()
+                print("inside while", self.signals["shutdown"])
+                break
+            time.sleep(0.1)
 
-        self.run_job()
-        print("Everything is down")
+        
+        print("run_job is done")
         thread_tcp_server.join()
         thread_udp_server.join()
         thread_fault_tolerance.join()
@@ -193,6 +196,7 @@ class Manager:
                     self.job_count += 1
                     self.job_queue.put(job)
                     LOGGER.info(f"Added Job with Job id: {job['job_id']}")
+                    self.havejob = True
                 elif message_dict["message_type"] == "finished":
                     worker_id = (message_dict["worker_host"], message_dict["worker_port"])
                     self.finished_job_tasks += 1
@@ -249,86 +253,79 @@ class Manager:
         
                         
     def run_job(self):
-        while not self.signals["shutdown"]:
-            # try:
-            if self.job_queue:
-                # Wait for a job to be available in the queue or check periodically
-                job = self.job_queue.get()  # Adjust timeout as necessary
-                files = []
-                for filename in os.listdir(job['input_directory']):
-                    file_path = os.path.join(job['input_directory'], filename)
-                    if os.path.isfile(file_path):
-                        # Add the file to the list only if it is a regular file
-                        files.append(filename)
-                # Sort the list of files by name
-                sorted_files = sorted(files)
+        #while not self.signals["shutdown"]:
+        print("Signal in runjob top:", self.signals["shutdown"])
+        if self.job_queue:
+            # Wait for a job to be available in the queue or check periodically
+            job = self.job_queue.get()  # Adjust timeout as necessary
+            files = []
+            for filename in os.listdir(job['input_directory']):
+                file_path = os.path.join(job['input_directory'], filename)
+                if os.path.isfile(file_path):
+                    # Add the file to the list only if it is a regular file
+                    files.append(filename)
+            # Sort the list of files by name
+            sorted_files = sorted(files)
 
-                # a list of tuples [[0,[]], [1,[]], ...]
-                self.current_task = [[j, []] for j in range(job['num_mappers'])]
+            # a list of tuples [[0,[]], [1,[]], ...]
+            self.current_task = [[j, []] for j in range(job['num_mappers'])]
 
-                for i, file_name in enumerate(sorted_files):
-                    mapper_index = i % job['num_mappers']
-                    self.current_task[mapper_index][1].append(file_name)
-            
-                # self.current_task = [[] for _ in range(job['num_mappers'])]
-                # for i, file_name in enumerate(sorted_files):
-                #     mapper_index = i % job['num_mappers']
-                #     self.current_task[mapper_index].append(file_name)
+            for i, file_name in enumerate(sorted_files):
+                mapper_index = i % job['num_mappers']
+                self.current_task[mapper_index][1].append(file_name)
+        
+            # self.current_task = [[] for _ in range(job['num_mappers'])]
+            # for i, file_name in enumerate(sorted_files):
+            #     mapper_index = i % job['num_mappers']
+            #     self.current_task[mapper_index].append(file_name)
+
+            self.copy_task = copy.deepcopy(self.current_task)
+
+            LOGGER.info(f"Starting job {job['job_id']}")
+            # delete output directory
+            output_directory = job["output_directory"]
+            if os.path.exists(output_directory):
+                shutil.rmtree(output_directory)
+                LOGGER.info(f"Deleted existing output directory: {output_directory}")
+
+            # Create the output directory
+            os.makedirs(output_directory)
+            LOGGER.info(f"Created output directory: {output_directory}")
+
+            # Create a shared directory for temporary intermediate files
+            prefix = f"mapreduce-shared-job{job['job_id']:05d}-" 
+            with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
+                LOGGER.info("Created tmpdir %s", tmpdir)
+
+                # run mapping job
+                while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers']):
+                    if self.current_task:
+                        self.send_mapping_tasks(job, tmpdir)  
+                    print("Stuck here 1")                          
+                    time.sleep(0.1)
+                
+                self.copy_task.clear()
+                self.current_task.clear()
+                # create reduce tasks, this is overwritten by a new empty list
+                self.current_task = [[] for _ in range(job['num_reducers'])]
+                sorted_dir = sorted(os.listdir(tmpdir))
+                for partition_file in sorted_dir:  # partition file is "123.txt"
+                    task_reduce_id = int(partition_file[-5:])
+                    file_path = os.path.join(tmpdir, partition_file)
+                    self.current_task[task_reduce_id].append(file_path)
 
                 self.copy_task = copy.deepcopy(self.current_task)
 
-                LOGGER.info(f"Starting job {job['job_id']}")
-                # delete output directory
-                output_directory = job["output_directory"]
-                if os.path.exists(output_directory):
-                    shutil.rmtree(output_directory)
-                    LOGGER.info(f"Deleted existing output directory: {output_directory}")
-
-                # Create the output directory
-                os.makedirs(output_directory)
-                LOGGER.info(f"Created output directory: {output_directory}")
-
-                # Create a shared directory for temporary intermediate files
-                prefix = f"mapreduce-shared-job{job['job_id']:05d}-" 
-                with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
-                    LOGGER.info("Created tmpdir %s", tmpdir)
-
-                    # run mapping job
-                    while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers']):
-                        if self.current_task:
-                           self.send_mapping_tasks(job, tmpdir)  
-                        print("Stuck here 1")                          
-                        # time.sleep(0.1)
-                    
-                    self.copy_task.clear()
-                    self.current_task.clear()
-                    # create reduce tasks, this is overwritten by a new empty list
-                    self.current_task = [[] for _ in range(job['num_reducers'])]
-                    sorted_dir = sorted(os.listdir(tmpdir))
-                    for partition_file in sorted_dir:  # partition file is "123.txt"
-                        task_reduce_id = int(partition_file[-5:])
-                        file_path = os.path.join(tmpdir, partition_file)
-                        self.current_task[task_reduce_id].append(file_path)
-
-                    self.copy_task = copy.deepcopy(self.current_task)
-
-                    # run reducing job
-                    while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
-                        if self.current_task:
-                            self.send_reducing_tasks(job)
-                        print("Stuck here 2")
-                        # time.sleep(0.1)
-                    
-                    self.copy_task.clear()
-                    self.current_task.clear()
-                LOGGER.info("Cleaned up tmpdir %s", tmpdir)
-
-            # except queue.Empty:
-            #     print("Queue is empty")
-            #     # No job was available in the queue
-            #     pass
-            print("Signal:", self.signals["shutdown"])
-            time.sleep(0.1)
+                # run reducing job
+                while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
+                    if self.current_task:
+                        self.send_reducing_tasks(job)
+                    print("Stuck here 2")
+                    time.sleep(0.1)
+                
+                self.copy_task.clear()
+                self.current_task.clear()
+        time.sleep(0.1)
         
 
 
