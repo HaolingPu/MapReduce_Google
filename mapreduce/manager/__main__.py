@@ -13,6 +13,7 @@ import shutil
 import hashlib
 from pathlib import Path
 from collections import OrderedDict
+import copy
 
 
 # Configure logging
@@ -131,7 +132,6 @@ class Manager:
                     break
 
                 elif message_dict["message_type"] == "register":  # check the dead worker alive now
-                    print("hahahaha")
                     worker_id = (message_dict["worker_host"], message_dict["worker_port"])
                     worker_host, worker_port = worker_id
                     if worker_id in self.workers:
@@ -157,15 +157,13 @@ class Manager:
                             LOGGER.info(f"Unrecognized Dead worker{worker_id} is now alive")
         
                     else:
-                        print("create a new worker object here!!!")
+                        LOGGER.info("create a new worker object here!!!")
                         self.workers[worker_id] = {
                             "status": "ready", # ready, busy, dead
                             "current_task_id": None,
                             "current_stage": None,
                             "last_ping": time.time()
                         }
-                        print("LLL", self.workers[worker_id])
-                        print("66666", worker_id)
 
                         LOGGER.info(f"New worker registered: {worker_id}")
                     try:
@@ -214,14 +212,10 @@ class Manager:
                     continue
                 message_str = message_bytes.decode("utf-8")
                 message_dict = json.loads(message_str)
-                print("3333", message_dict)
                 if message_dict["message_type"] == "heartbeat":
                     worker_host = message_dict["worker_host"]
                     worker_port = message_dict["worker_port"]
                     worker_id = (worker_host, worker_port)
-                    # print("1111", worker_id)
-                    # # update last ping
-                    # print("22222",self.workers)
                     if worker_id not in self.workers:
                         continue
                     self.workers[worker_id]["last_ping"] = time.time()  # it looks like we don't have the worker yet. WHY?
@@ -237,15 +231,14 @@ class Manager:
             for key in self.workers:
                 if self.workers[key]["last_ping"] is None:
                     continue
-                print(time.time() - self.workers[key]["last_ping"])
                 if time.time() - self.workers[key]["last_ping"] > 10 or self.workers[key]["status"] == "dead": # the worker is dead
 
                     if self.workers[key]["status"] == "busy":
-                        print("worker is dead")
-                        self.workers[key]["status"] = "dead"
                         task_id = self.workers[key]["current_task_id"]
                         self.append_failed_task(key, task_id)
-                        print(self.current_task)
+                        self.workers[key]["status"] = "dead"
+                        LOGGER.info("worker is dead")
+
 
                     self.workers[key]["current_task_id"] = None
                     self.workers[key]["current_stage"] = None
@@ -279,7 +272,7 @@ class Manager:
                 #     mapper_index = i % job['num_mappers']
                 #     self.current_task[mapper_index].append(file_name)
 
-                self.copy_task = self.current_task
+                self.copy_task = copy.deepcopy(self.current_task)
 
                 LOGGER.info(f"Starting job {job['job_id']}")
                 # delete output directory
@@ -301,7 +294,7 @@ class Manager:
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers']):
                         if self.current_task:
                            self.send_mapping_tasks(job, tmpdir)                            
-                        time.sleep(0.1)
+                        # time.sleep(0.1)
                     
                     self.copy_task.clear()
                     self.current_task.clear()
@@ -313,12 +306,13 @@ class Manager:
                         file_path = os.path.join(tmpdir, partition_file)
                         self.current_task[task_reduce_id].append(file_path)
 
-                    self.copy_task = self.current_task
+                    self.copy_task = copy.deepcopy(self.current_task)
 
                     # run reducing job
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
-                        self.send_reducing_tasks(job)
-                        time.sleep(0.1)
+                        if self.current_task:
+                            self.send_reducing_tasks(job)
+                        # time.sleep(0.1)
                     
                     self.copy_task.clear()
                     self.current_task.clear()
@@ -336,9 +330,6 @@ class Manager:
                 if self.workers[worker_id]['status'] == "ready":
                     task_map_id = self.current_task[0][0]
                     self.workers[worker_id]['current_task_id'] = task_map_id
-                    print("LOL", task_map_id)
-                    print("Current", self.current_task)
-                    print("Copy", self.copy_task)
                     self.workers[worker_id]['current_stage'] = "mapping"
                     self.workers[worker_id]['status'] = "busy"
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
