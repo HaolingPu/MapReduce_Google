@@ -57,7 +57,7 @@ class Manager:
             if self.havejob == True:
                 self.run_job()
                 print("inside while", self.signals["shutdown"])
-                break
+                self.havejob = not self.job_queue.empty()
             time.sleep(0.1)
 
         
