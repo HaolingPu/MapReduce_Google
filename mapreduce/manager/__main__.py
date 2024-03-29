@@ -58,10 +58,10 @@ class Manager:
         
 
         self.run_job()
+        print("Everything is down")
         thread_tcp_server.join()
         thread_udp_server.join()
         thread_fault_tolerance.join()
-        
         LOGGER.info(
             "Starting manager host=%s port=%s pwd=%s",
             host, port, os.getcwd(),
@@ -116,18 +116,20 @@ class Manager:
                     for worker_id in self.workers:
                         if self.workers[worker_id]["status"] != "dead":
                             worker_host, worker_port = worker_id
+                            self.workers[worker_id]["status"] = "dead"
                             try: 
-                                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock1:
                                     # connect to the server
-                                    sock.connect((worker_host, worker_port))
+                                    sock1.connect((worker_host, worker_port))
                                     # send a message
                                     message = json.dumps({"message_type": "shutdown"})
-                                    sock.sendall(message.encode('utf-8'))
+                                    sock1.sendall(message.encode('utf-8'))
                             except ConnectionRefusedError:
                                 self.workers[worker_id]["status"] = "dead"
                                 LOGGER.info("ConnectionRefusedError")
 
                     self.signals["shutdown"] = True
+                    print(self.signals["shutdown"])
                     LOGGER.info("Manager shut down!")
                     break
 
@@ -167,11 +169,11 @@ class Manager:
 
                         LOGGER.info(f"New worker registered: {worker_id}")
                     try:
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock2:
                                 # connect to the server
-                                sock.connect((worker_host, worker_port))
+                                sock2.connect((worker_host, worker_port))
                                 ack_message = json.dumps({"message_type": "register_ack"})
-                                sock.sendall(ack_message.encode('utf-8'))
+                                sock2.sendall(ack_message.encode('utf-8'))
                                 LOGGER.info(f"Sent registration acknowledgment to worker {worker_id}.")
                     except ConnectionRefusedError:
                         self.con_err_refuse(self, worker_id)
@@ -199,15 +201,15 @@ class Manager:
     
     def manager_udp_server (self):
             # Create an INET, DGRAM socket, this is UDP
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock3:
             # Bind the UDP socket to the server
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind((self.host, self.port))
-            sock.settimeout(1)
+            sock3.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock3.bind((self.host, self.port))
+            sock3.settimeout(1)
             # Receive incoming UDP messages
             while not self.signals["shutdown"]:
                 try:
-                    message_bytes = sock.recv(4096)
+                    message_bytes = sock3.recv(4096)
                 except socket.timeout:
                     continue
                 message_str = message_bytes.decode("utf-8")
@@ -248,7 +250,8 @@ class Manager:
                         
     def run_job(self):
         while not self.signals["shutdown"]:
-            try:
+            # try:
+            if self.job_queue:
                 # Wait for a job to be available in the queue or check periodically
                 job = self.job_queue.get()  # Adjust timeout as necessary
                 files = []
@@ -293,7 +296,8 @@ class Manager:
                     # run mapping job
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers']):
                         if self.current_task:
-                           self.send_mapping_tasks(job, tmpdir)                            
+                           self.send_mapping_tasks(job, tmpdir)  
+                        print("Stuck here 1")                          
                         # time.sleep(0.1)
                     
                     self.copy_task.clear()
@@ -312,15 +316,19 @@ class Manager:
                     while (not self.signals["shutdown"]) and (self.finished_job_tasks != job['num_mappers'] + job['num_reducers']):
                         if self.current_task:
                             self.send_reducing_tasks(job)
+                        print("Stuck here 2")
                         # time.sleep(0.1)
                     
                     self.copy_task.clear()
                     self.current_task.clear()
                 LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
-            except queue.Empty:
-                # No job was available in the queue
-                pass
+            # except queue.Empty:
+            #     print("Queue is empty")
+            #     # No job was available in the queue
+            #     pass
+            print("Signal:", self.signals["shutdown"])
+            time.sleep(0.1)
         
 
 
@@ -332,9 +340,9 @@ class Manager:
                     self.workers[worker_id]['current_task_id'] = task_map_id
                     self.workers[worker_id]['current_stage'] = "mapping"
                     self.workers[worker_id]['status'] = "busy"
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock4:
                         worker_host, worker_port = worker_id
-                        sock.connect((worker_host, worker_port))
+                        sock4.connect((worker_host, worker_port))
                         input_paths = []
                         for file in self.current_task[0][1]: # the list of files for the first task
                             input_paths.append(str(job['input_directory']) + '/' + str(file))
@@ -347,8 +355,9 @@ class Manager:
                                     "num_partitions": job['num_reducers']
                                 }
                         message = json.dumps(context)
-                        sock.sendall(message.encode('utf-8'))
+                        sock4.sendall(message.encode('utf-8'))
                     self.current_task.pop(0)
+                    break
                 
         except ConnectionRefusedError:
                 self.workers[worker_id]["status"] = "dead"
@@ -366,9 +375,9 @@ class Manager:
                     self.workers[worker_id]['status'] = "busy"
                     LOGGER.info("HEY there")
                     LOGGER.info(self.current_task[0])
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock5:
                         worker_host, worker_port = worker_id
-                        sock.connect((worker_host, worker_port))
+                        sock5.connect((worker_host, worker_port))
                         context = {
                                     "message_type": "new_reduce_task",
                                     "task_id": task_reduce_id,
@@ -377,7 +386,7 @@ class Manager:
                                     "output_directory": job['output_directory'],
                                 }
                         message = json.dumps(context)
-                        sock.sendall(message.encode('utf-8'))
+                        sock5.sendall(message.encode('utf-8'))
                     self.current_task.pop(0)
                     break
         except ConnectionRefusedError:

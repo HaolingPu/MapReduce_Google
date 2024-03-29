@@ -114,6 +114,7 @@ class Worker:
 
                 elif message_dict["message_type"] == "shutdown":
                     # if worker is busy, shutdown after running job
+                    print("Worker SHUTDOWN!")
                     self.signals["shutdown"] = True
                     break
                 #  else do work
