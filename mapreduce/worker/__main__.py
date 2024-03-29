@@ -62,7 +62,7 @@ class Worker:
             worker_udp_client.join()
 
         
-    @lru_cache(maxsize=None)
+    @lru_cache(maxsize=1024)
     def hash_key(self, key):
         """Cache and return the hash of the key."""
         return int(hashlib.md5(key.encode("utf-8")).hexdigest(), base=16)
@@ -170,8 +170,8 @@ class Worker:
                     for line in process.stdout:
                         # partition
                         key, value = line.split('\t', 1)
-                        # hexdigest = hashlib.md5(key.encode("utf-8")).hexdigest()
-                        # keyhash = int(hexdigest, base=16)
+                        #hexdigest = hashlib.md5(key.encode("utf-8")).hexdigest()
+                        #keyhash = int(hexdigest, base=16)
                         keyhash = self.hash_key(key)
                         partition_number = keyhash % num_partitions
                         partition_path = os.path.join(tmpdir, f"maptask{task_id:05d}-part{partition_number:05d}")
