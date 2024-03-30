@@ -222,33 +222,29 @@ class Worker:
             prefix=prefix
         ) as tmpdir, ExitStack() as stack:
             LOGGER.info("Created local tmpdir %s", tmpdir)
-            # create the output destination
-            part_num = input_paths[0][-5:]
-            output_path = os.path.join(tmpdir, f"part-{part_num}")
-            output_file = stack.enter_context(
-                open(output_path, 'w', encoding='utf-8')
-            )
-            # a list of file for heap merge
             input_files = []
             for file in input_paths:
                 input_files.append(
                     stack.enter_context(
-                        open(file, 'r', encoding='utf-8')
+                        open(file, encoding='utf-8')
                     )
                 )
+                
+            part_num = input_paths[0][-5:]
+            output_path = os.path.join(tmpdir, f"part-{part_num}")
+            with stack.enter_context(open(output_path, 'w', encoding="utf-8")) as output_file:
+                with subprocess.Popen(
+                        [reduce_executable],
+                        text=True,
+                        stdin=subprocess.PIPE,
+                        stdout=output_file
+                ) as reduce_process:  # TIME ISSUE
+                    # Pipe input to reduce_process
+                    for line in heapq.merge(*input_files):
+                        reduce_process.stdin.write(line)
 
-            with subprocess.Popen(
-                    [reduce_executable],
-                    text=True,
-                    stdin=subprocess.PIPE,
-                    stdout=output_file
-            ) as reduce_process:  # TIME ISSUE
-                # Pipe input to reduce_process
-                for line in heapq.merge(*input_files):
-                    reduce_process.stdin.write(line)
-
-            for file in input_files:
-                file.close()
+                #for file in input_files:
+                #    file.close()
             # Move to shared directory[]
             shutil.move(output_path, output_dir)
 
