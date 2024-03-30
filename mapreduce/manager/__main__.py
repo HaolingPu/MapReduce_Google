@@ -96,9 +96,6 @@ class Manager:
                 LOGGER.info("Received message: %s", message_dict)
 
                 if message_dict["message_type"] == "shutdown":
-                    # ??如果send shutdown message
-                    # 遇到了connectionerror 怎么办？ mark as dead吗？
-                    # send the shutdown message to all the workers
                     for worker_id, worker in self.workers.items():
                         if worker["status"] != "dead":
                             worker_host, worker_port = worker_id
@@ -121,64 +118,64 @@ class Manager:
                     print(self.signals["shutdown"])
                     LOGGER.info("Manager shut down!")
                     break
-
                 if message_dict["message_type"] == "register":
                     self.handle_register(message_dict)
-                #     # check the dead worker alive now
-                #     worker_id = (
-                #         message_dict["worker_host"],
-                #         message_dict["worker_port"]
-                #     )
-                #     worker_host, worker_port = worker_id
-                #     if worker_id in self.workers:
-                #         if self.workers[worker_id]["status"] == "dead":
-                #             self.workers[worker_id]["status"] = "ready"
-                #             self.workers[worker_id]["current_stage"] = None
-                #             LOGGER.info(
-                #                 "Recognized Dead worker%s is now alive",
-                #                 worker_id
-                #             )
-                #         elif self.workers[worker_id]["status"] == "busy":
-                #             # reassign task
-                #             task_id = (
-                #                 self.workers[worker_id]["current_task_id"]
-                #             )
-                #             # split into two cases
-                #             self.append_failed_task(worker_id, task_id)
-                #             self.workers[worker_id]["status"] = "ready"
-                #             self.workers[worker_id]["current_stage"] = None
-                #             LOGGER.info(
-                #                 "Unrecognized Dead worker%s is now alive",
-                #                 worker_id
-                #             )
-                #     else:
-                #         LOGGER.info("create a new worker object here!!!")
-                #         self.workers[worker_id] = {
-                #             "status": "ready",  # ready, busy, dead
-                #             "current_task_id": None,
-                #             "current_stage": None,
-                #             "last_ping": time.time()
-                #         }
+                    # check the dead worker alive now
+                    # worker_id = (
+                    #     message_dict["worker_host"],
+                    #     message_dict["worker_port"]
+                    # )
+                    # worker_host, worker_port = worker_id
+                    # try:
+                    #     with socket.socket(
+                    #         socket.AF_INET, socket.SOCK_STREAM
+                    #     ) as sock2:
+                    #         # connect to the server
+                    #         sock2.connect((worker_host, worker_port))
+                    #         ack_message = json.dumps(
+                    #             {"message_type": "register_ack"}
+                    #         )
+                    #         sock2.sendall(ack_message.encode('utf-8'))
+                    #         LOGGER.info(
+                    #             "Sent registration"
+                    #             " acknowledgment to worker %s.",
+                    #             worker_id
+                    #         )
+                    # except ConnectionRefusedError:
+                    #     self.con_err_refuse(worker_id)
+                    #     LOGGER.info("ConnectionRefusedError")
 
-                #         LOGGER.info("New worker registered: %s", worker_id)
-                #     try:
-                #         with socket.socket(
-                #             socket.AF_INET, socket.SOCK_STREAM
-                #         ) as sock2:
-                #             # connect to the server
-                #             sock2.connect((worker_host, worker_port))
-                #             ack_message = json.dumps(
-                #                 {"message_type": "register_ack"}
-                #             )
-                #             sock2.sendall(ack_message.encode('utf-8'))
-                #             LOGGER.info(
-                #                 "Sent registration"
-                #                 " acknowledgment to worker %s.",
-                #                 worker_id
-                #             )
-                #     except ConnectionRefusedError:
-                #         self.con_err_refuse(worker_id)
-                #         LOGGER.info("ConnectionRefusedError")
+                    # if worker_id in self.workers:
+                    #     if self.workers[worker_id]["status"] == "dead":
+                    #         self.workers[worker_id]["status"] = "ready"
+                    #         self.workers[worker_id]["current_stage"] = None
+                    #         LOGGER.info(
+                    #             "Recognized Dead worker%s is now alive",
+                    #             worker_id
+                    #         )
+                    #     elif self.workers[worker_id]["status"] == "busy":
+                    #         # reassign task
+                    #         task_id = (
+                    #             self.workers[worker_id]["current_task_id"]
+                    #         )
+                    #         # split into two cases
+                    #         self.append_failed_task(worker_id, task_id)
+                    #         self.workers[worker_id]["status"] = "ready"
+                    #         self.workers[worker_id]["current_stage"] = None
+                    #         LOGGER.info(
+                    #             "Unrecognized Dead worker%s is now alive",
+                    #             worker_id
+                    #         )
+                    # else:
+                    #     LOGGER.info("create a new worker object here!!!")
+                    #     self.workers[worker_id] = {
+                    #         "status": "ready",  # ready, busy, dead
+                    #         "current_task_id": None,
+                    #         "current_stage": None,
+                    #         "last_ping": time.time()
+                    #     }
+
+                    #     LOGGER.info("New worker registered: %s", worker_id)
 
                 elif message_dict["message_type"] == "new_manager_job":
                     job = {
@@ -208,62 +205,62 @@ class Manager:
 
     def handle_register(self, message_dict):
         """Handle Register Message."""
-        if message_dict["message_type"] == "register":
-            # check the dead worker alive now
-            worker_id = (
-                message_dict["worker_host"],
-                message_dict["worker_port"]
-            )
-            worker_host, worker_port = worker_id
-            if worker_id in self.workers:
-                if self.workers[worker_id]["status"] == "dead":
-                    self.workers[worker_id]["status"] = "ready"
-                    self.workers[worker_id]["current_stage"] = None
-                    LOGGER.info(
-                        "Recognized Dead worker%s is now alive",
-                        worker_id
+        # check the dead worker alive now
+        worker_id = (
+                        message_dict["worker_host"],
+                        message_dict["worker_port"]
                     )
-                elif self.workers[worker_id]["status"] == "busy":
-                    # reassign task
-                    task_id = (
-                        self.workers[worker_id]["current_task_id"]
-                    )
-                    # split into two cases
-                    self.append_failed_task(worker_id, task_id)
-                    self.workers[worker_id]["status"] = "ready"
-                    self.workers[worker_id]["current_stage"] = None
-                    LOGGER.info(
-                        "Unrecognized Dead worker%s is now alive",
-                        worker_id
-                    )
-            else:
-                LOGGER.info("create a new worker object here!!!")
-                self.workers[worker_id] = {
-                    "status": "ready",  # ready, busy, dead
-                    "current_task_id": None,
-                    "current_stage": None,
-                    "last_ping": time.time()
-                }
+        worker_host, worker_port = worker_id
+        try:
+            with socket.socket(
+                socket.AF_INET, socket.SOCK_STREAM
+            ) as sock2:
+                # connect to the server
+                sock2.connect((worker_host, worker_port))
+                ack_message = json.dumps(
+                    {"message_type": "register_ack"}
+                )
+                sock2.sendall(ack_message.encode('utf-8'))
+                LOGGER.info(
+                    "Sent registration"
+                    " acknowledgment to worker %s.",
+                    worker_id
+                )
+        except ConnectionRefusedError:
+            self.con_err_refuse(worker_id)
+            LOGGER.info("ConnectionRefusedError")
 
-                LOGGER.info("New worker registered: %s", worker_id)
-            try:
-                with socket.socket(
-                    socket.AF_INET, socket.SOCK_STREAM
-                ) as sock2:
-                    # connect to the server
-                    sock2.connect((worker_host, worker_port))
-                    ack_message = json.dumps(
-                        {"message_type": "register_ack"}
-                    )
-                    sock2.sendall(ack_message.encode('utf-8'))
-                    LOGGER.info(
-                        "Sent registration"
-                        " acknowledgment to worker %s.",
-                        worker_id
-                    )
-            except ConnectionRefusedError:
-                self.con_err_refuse(worker_id)
-                LOGGER.info("ConnectionRefusedError")
+        if worker_id in self.workers:
+            if self.workers[worker_id]["status"] == "dead":
+                self.workers[worker_id]["status"] = "ready"
+                self.workers[worker_id]["current_stage"] = None
+                LOGGER.info(
+                    "Recognized Dead worker%s is now alive",
+                    worker_id
+                )
+            elif self.workers[worker_id]["status"] == "busy":
+                # reassign task
+                task_id = (
+                    self.workers[worker_id]["current_task_id"]
+                )
+                # split into two cases
+                self.append_failed_task(worker_id, task_id)
+                self.workers[worker_id]["status"] = "ready"
+                self.workers[worker_id]["current_stage"] = None
+                LOGGER.info(
+                    "Unrecognized Dead worker%s is now alive",
+                    worker_id
+                )
+        else:
+            LOGGER.info("create a new worker object here!!!")
+            self.workers[worker_id] = {
+                "status": "ready",  # ready, busy, dead
+                "current_task_id": None,
+                "current_stage": None,
+                "last_ping": time.time()
+            }
+
+            LOGGER.info("New worker registered: %s", worker_id)
 
     def manager_udp_server(self, host, port):
         """Construct a Manager instance and start listening for messages."""
