@@ -1,4 +1,2 @@
-"""Utils package.
-
-This package is for code shared by the Manager and the Worker.
-"""
+"""MapReduce framework Utility."""
+from mapreduce.utils.network import listen_message

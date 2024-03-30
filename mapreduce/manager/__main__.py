@@ -10,6 +10,7 @@ import queue
 import shutil
 import copy
 import click
+from mapreduce.utils import listen_message
 
 
 # Configure logging
@@ -21,19 +22,22 @@ class Manager:
 
     def __init__(self, host, port):
         """Construct a Manager instance and start listening for messages."""
-        self.host = host
-        self.port = port
+        # self.host = host
+        # self.port = port
         self.signals = {"shutdown": False}
         self.workers = {}
         self.job_queue = queue.Queue()
-        self.job_count = 0
-        self.finished_job_tasks = 0
+        # self.job_count = 0
+        # self.finished_job_tasks = 0
+        self.job_info = {"job_count": 0, "finished_job_tasks": 0}
         self.current_task = None
         self.copy_task = None
         self.havejob = False
-        thread_tcp_server = threading.Thread(target=self.manager_tcp_server)
+        thread_tcp_server = threading.Thread(target=self.manager_tcp_server,
+                                             args=(host, port))
         thread_tcp_server.name = "manager_tcp_server"
-        thread_udp_server = threading.Thread(target=self.manager_udp_server)
+        thread_udp_server = threading.Thread(target=self.manager_udp_server,
+                                             args=(host, port))
         thread_udp_server.name = "manager_udp_server"
         thread_fault_tolerance = threading.Thread(
             target=self.fault_tolerance_thread
@@ -49,7 +53,7 @@ class Manager:
                 self.run_job()
                 print("inside while", self.signals["shutdown"])
                 self.havejob = not self.job_queue.empty()
-                self.finished_job_tasks = 0
+                self.job_info["finished_job_tasks"] = 0
             time.sleep(0.1)
 
         print("run_job is done")
@@ -61,16 +65,16 @@ class Manager:
             host, port, os.getcwd(),
         )
 
-    def manager_tcp_server(self):
+    def manager_tcp_server(self, host, port):
         """Construct a Manager instance and start listening for messages."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             # Bind the socket to the server
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind((self.host, self.port))
+            sock.bind((host, port))
             sock.listen()
             sock.settimeout(0.1)
 
-            LOGGER.info("TCP Server listening on %s:%s", self.host, self.port)
+            LOGGER.info("TCP Server listening on %s:%s", host, port)
 
             while not self.signals["shutdown"]:
                 try:
@@ -81,23 +85,8 @@ class Manager:
 
                 clientsocket.settimeout(0.1)
 
-                with clientsocket:
-                    message_chunks = []
-                    while True:
-                        try:
-                            data = clientsocket.recv(4096)
-                        except socket.timeout:
-                            continue
-                        if not data:
-                            break
-                        message_chunks.append(data)
-
-                # Decode list-of-byte-strings to UTF8 and parse JSON data
-                message_bytes = b''.join(message_chunks)
-                message_str = message_bytes.decode("utf-8")
-
                 try:
-                    message_dict = json.loads(message_str)
+                    message_dict = json.loads(listen_message(clientsocket))
                 except json.JSONDecodeError:
                     LOGGER.warning(
                         "Invalid JSON message received and ignored."
@@ -134,74 +123,66 @@ class Manager:
                     break
 
                 if message_dict["message_type"] == "register":
-                    # check the dead worker alive now
-                    worker_id = (
-                        message_dict["worker_host"],
-                        message_dict["worker_port"]
-                    )
-                    worker_host, worker_port = worker_id
-                    if worker_id in self.workers:
-                        if self.workers[worker_id]["status"] == "dead":
-                            self.workers[worker_id]["status"] = "ready"
-                            self.workers[worker_id]["current_stage"] = None
-                            LOGGER.info(
-                                "Recognized Dead worker%s is now alive",
-                                worker_id
-                            )
-                        elif self.workers[worker_id]["status"] == "busy":
-                            # reassign task
-                            task_id = (
-                                self.workers[worker_id]["current_task_id"]
-                            )
-                            # split into two cases
-                            self.append_failed_task(worker_id, task_id)
-                            # if (self.workers[worker_id]["current_stage"]
-                            #  == "mapping"):
-                            #     for sublist in self.copy_task:
-                            #         if sublist[0] == task_id:
-                            #             self.current_task.append(sublist)
-                            #             break
-                            #     self.current_task.append(self.copy_task[])
-                            # else:
-                            #     self.current_task.append(self.copy_task[task_id])
-                            self.workers[worker_id]["status"] = "ready"
-                            self.workers[worker_id]["current_stage"] = None
-                            LOGGER.info(
-                                "Unrecognized Dead worker%s is now alive",
-                                worker_id
-                            )
-                    else:
-                        LOGGER.info("create a new worker object here!!!")
-                        self.workers[worker_id] = {
-                            "status": "ready",  # ready, busy, dead
-                            "current_task_id": None,
-                            "current_stage": None,
-                            "last_ping": time.time()
-                        }
+                    self.handle_register(message_dict)
+                #     # check the dead worker alive now
+                #     worker_id = (
+                #         message_dict["worker_host"],
+                #         message_dict["worker_port"]
+                #     )
+                #     worker_host, worker_port = worker_id
+                #     if worker_id in self.workers:
+                #         if self.workers[worker_id]["status"] == "dead":
+                #             self.workers[worker_id]["status"] = "ready"
+                #             self.workers[worker_id]["current_stage"] = None
+                #             LOGGER.info(
+                #                 "Recognized Dead worker%s is now alive",
+                #                 worker_id
+                #             )
+                #         elif self.workers[worker_id]["status"] == "busy":
+                #             # reassign task
+                #             task_id = (
+                #                 self.workers[worker_id]["current_task_id"]
+                #             )
+                #             # split into two cases
+                #             self.append_failed_task(worker_id, task_id)
+                #             self.workers[worker_id]["status"] = "ready"
+                #             self.workers[worker_id]["current_stage"] = None
+                #             LOGGER.info(
+                #                 "Unrecognized Dead worker%s is now alive",
+                #                 worker_id
+                #             )
+                #     else:
+                #         LOGGER.info("create a new worker object here!!!")
+                #         self.workers[worker_id] = {
+                #             "status": "ready",  # ready, busy, dead
+                #             "current_task_id": None,
+                #             "current_stage": None,
+                #             "last_ping": time.time()
+                #         }
 
-                        LOGGER.info("New worker registered: %s", worker_id)
-                    try:
-                        with socket.socket(
-                            socket.AF_INET, socket.SOCK_STREAM
-                        ) as sock2:
-                            # connect to the server
-                            sock2.connect((worker_host, worker_port))
-                            ack_message = json.dumps(
-                                {"message_type": "register_ack"}
-                            )
-                            sock2.sendall(ack_message.encode('utf-8'))
-                            LOGGER.info(
-                                "Sent registration"
-                                " acknowledgment to worker %s.",
-                                worker_id
-                            )
-                    except ConnectionRefusedError:
-                        self.con_err_refuse(worker_id)
-                        LOGGER.info("ConnectionRefusedError")
+                #         LOGGER.info("New worker registered: %s", worker_id)
+                #     try:
+                #         with socket.socket(
+                #             socket.AF_INET, socket.SOCK_STREAM
+                #         ) as sock2:
+                #             # connect to the server
+                #             sock2.connect((worker_host, worker_port))
+                #             ack_message = json.dumps(
+                #                 {"message_type": "register_ack"}
+                #             )
+                #             sock2.sendall(ack_message.encode('utf-8'))
+                #             LOGGER.info(
+                #                 "Sent registration"
+                #                 " acknowledgment to worker %s.",
+                #                 worker_id
+                #             )
+                #     except ConnectionRefusedError:
+                #         self.con_err_refuse(worker_id)
+                #         LOGGER.info("ConnectionRefusedError")
 
                 elif message_dict["message_type"] == "new_manager_job":
                     job = {
-                            "job_id": self.job_count,
+                            "job_id": self.job_info['job_count'],
                             "input_directory": message_dict["input_directory"],
                             "output_directory":
                             message_dict["output_directory"],
@@ -212,7 +193,7 @@ class Manager:
                             "num_mappers": message_dict["num_mappers"],
                             "num_reducers": message_dict["num_reducers"]
                             }
-                    self.job_count += 1
+                    self.job_info['job_count'] += 1
                     self.job_queue.put(job)
                     LOGGER.info("Added Job with Job id: %s", job['job_id'])
                     self.havejob = True
@@ -221,17 +202,76 @@ class Manager:
                         message_dict["worker_host"],
                         message_dict["worker_port"]
                     )
-                    self.finished_job_tasks += 1
+                    self.job_info["finished_job_tasks"] += 1
                     self.workers[worker_id]['status'] = "ready"
                     # "task_id": int,
 
-    def manager_udp_server(self):
+    def handle_register(self, message_dict):
+        """Handle Register Message."""
+        if message_dict["message_type"] == "register":
+            # check the dead worker alive now
+            worker_id = (
+                message_dict["worker_host"],
+                message_dict["worker_port"]
+            )
+            worker_host, worker_port = worker_id
+            if worker_id in self.workers:
+                if self.workers[worker_id]["status"] == "dead":
+                    self.workers[worker_id]["status"] = "ready"
+                    self.workers[worker_id]["current_stage"] = None
+                    LOGGER.info(
+                        "Recognized Dead worker%s is now alive",
+                        worker_id
+                    )
+                elif self.workers[worker_id]["status"] == "busy":
+                    # reassign task
+                    task_id = (
+                        self.workers[worker_id]["current_task_id"]
+                    )
+                    # split into two cases
+                    self.append_failed_task(worker_id, task_id)
+                    self.workers[worker_id]["status"] = "ready"
+                    self.workers[worker_id]["current_stage"] = None
+                    LOGGER.info(
+                        "Unrecognized Dead worker%s is now alive",
+                        worker_id
+                    )
+            else:
+                LOGGER.info("create a new worker object here!!!")
+                self.workers[worker_id] = {
+                    "status": "ready",  # ready, busy, dead
+                    "current_task_id": None,
+                    "current_stage": None,
+                    "last_ping": time.time()
+                }
+
+                LOGGER.info("New worker registered: %s", worker_id)
+            try:
+                with socket.socket(
+                    socket.AF_INET, socket.SOCK_STREAM
+                ) as sock2:
+                    # connect to the server
+                    sock2.connect((worker_host, worker_port))
+                    ack_message = json.dumps(
+                        {"message_type": "register_ack"}
+                    )
+                    sock2.sendall(ack_message.encode('utf-8'))
+                    LOGGER.info(
+                        "Sent registration"
+                        " acknowledgment to worker %s.",
+                        worker_id
+                    )
+            except ConnectionRefusedError:
+                self.con_err_refuse(worker_id)
+                LOGGER.info("ConnectionRefusedError")
+
+    def manager_udp_server(self, host, port):
         """Construct a Manager instance and start listening for messages."""
         # Create an INET, DGRAM socket, this is UDP
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock3:
             # Bind the UDP socket to the server
             sock3.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock3.bind((self.host, self.port))
+            sock3.bind((host, port))
             sock3.settimeout(0.1)
             # Receive incoming UDP messages
             while not self.signals["shutdown"]:
@@ -324,7 +364,8 @@ class Manager:
 
                 # run mapping job
                 while (not self.signals["shutdown"]) \
-                        and (self.finished_job_tasks != job['num_mappers']):
+                        and (self.job_info["finished_job_tasks"]
+                             != job['num_mappers']):
                     if self.current_task:
                         self.send_mapping_tasks(job, tmpdir)
                     print("Stuck here 1")
@@ -345,7 +386,7 @@ class Manager:
 
                 # run reducing job
                 while (not self.signals["shutdown"]) \
-                        and (self.finished_job_tasks !=
+                        and (self.job_info["finished_job_tasks"] !=
                              job['num_mappers'] + job['num_reducers']):
                     if self.current_task:
                         self.send_reducing_tasks(job)

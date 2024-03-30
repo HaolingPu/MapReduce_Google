@@ -13,6 +13,7 @@ import heapq
 from contextlib import ExitStack
 from functools import lru_cache
 import click
+from mapreduce.utils import listen_message
 
 # 2. self.worker  is not inserted!
 # 3. I have infinite loop for the fault tolarance. WHY?
@@ -79,30 +80,29 @@ class Worker:
                 # CPU while waiting for a connection.
                 try:
                     clientsocket, address = sock.accept()
+                    LOGGER.info("Connection from %s", address[0])
                 except socket.timeout:
                     continue
-                LOGGER.info("Connection from %s", address[0])
-
                 clientsocket.settimeout(1)
 
-                with clientsocket:
-                    message_chunks = []
-                    while True:
-                        try:
-                            data = clientsocket.recv(4096)
-                        except socket.timeout:
-                            continue
-                        if not data:
-                            break
-                        message_chunks.append(data)
+                # with clientsocket:
+                #     message_chunks = []
+                #     while True:
+                #         try:
+                #             data = clientsocket.recv(4096)
+                #         except socket.timeout:
+                #             continue
+                #         if not data:
+                #             break
+                #         message_chunks.append(data)
 
-                # Decode list-of-byte-strings to UTF8 and parse JSON data
-                message_bytes = b''.join(message_chunks)
-                message_str = message_bytes.decode("utf-8")
+                # # Decode list-of-byte-strings to UTF8 and parse JSON data
+                # message_bytes = b''.join(message_chunks)
+                # message_str = message_bytes.decode("utf-8")
 
-                LOGGER.info(message_str)
+                # LOGGER.info(message_str)
                 try:
-                    message_dict = json.loads(message_str)
+                    message_dict = json.loads(listen_message(clientsocket))
                 except json.JSONDecodeError:
                     LOGGER.error("Failed to decode JSON message.")
                     continue
@@ -142,42 +142,47 @@ class Worker:
 
     def mapper_worker(self, map_task):
         """Send a registration message to the Manager."""
-        task_id = map_task['task_id']
-        map_executable = map_task['executable']
-        input_paths = map_task['input_paths']
-        shared_dir = map_task['output_directory']
-        num_partitions = map_task['num_partitions']
-        partition_files = []
+        # task_id = map_task['task_id']
+        # map_executable = map_task['executable']
+        # input_paths = map_task['input_paths']
+        # shared_dir = map_task['output_directory']
+        # num_partitions = map_task['num_partitions']
         # create directory local to worker
-        prefix = f"mapreduce-local-task{task_id:05d}-"
+        # prefix = f"mapreduce-local-task{task_id:05d}-"
+        partition_files = []
         with tempfile.TemporaryDirectory(
-            prefix=prefix
+            prefix=f"mapreduce-local-task{map_task['task_id']:05d}-"
         ) as tmpdir, ExitStack() as stack:
             LOGGER.info("Created local tmpdir %s", tmpdir)
             # partition_files = {}  # Track file descriptors
             # run executable on each file
-            for i in range(num_partitions):
+            for i in range(map_task['num_partitions']):
                 partition_path = os.path.join(
                                 tmpdir,
-                                f"maptask{task_id:05d}-part{i:05d}"
+                                f"maptask{map_task['task_id']:05d}-part{i:05d}"
                 )
-                partition_files.append(stack.enter_context(open(partition_path, 'w', encoding = "utf-8")))
-            for input_path in input_paths:
+                partition_files.append(stack.enter_context
+                                       (open(partition_path,
+                                             'w', encoding="utf-8")))
+            for input_path in map_task['input_paths']:
                 # infile = stack.enter_context(
                 #     open(input_path, 'r', encoding='utf-8')
                 # )
-                with stack.enter_context(open(input_path, 'r', encoding='utf-8')) as infile:
+                with stack.enter_context(open(input_path, 'r',
+                                              encoding='utf-8')) as infile:
                     with subprocess.Popen(
-                        [map_executable],
+                        [map_task['executable']],
                         stdin=infile,
                         stdout=subprocess.PIPE,
                         text=True
                     ) as process:  # TIME ISSUE
                         for line in process.stdout:
                             # partition
-                            key = line.partition("\t")[0]
-                            keyhash = self.hash_key(key)
-                            partition_number = keyhash % num_partitions
+                            # key = line.partition("\t")[0]
+                            partition_number = self.hash_key(
+                                line.partition("\t")[0]) % \
+                                    map_task['num_partitions']
+                            # partition_number = keyhash % map_task['num_part
                             partition_files[partition_number].write(line)
 
             for f in partition_files:
@@ -190,7 +195,7 @@ class Worker:
                     ['sort', '-o', file_path, file_path], check=True
                 )
                 # Move to shared directory
-                shutil.move(file_path, shared_dir)
+                shutil.move(file_path, map_task['output_directory'])
                 # os.path.join(shared_dir, partitionfiles
 
         LOGGER.info("Cleaned up tmpdir %s", tmpdir)
@@ -215,7 +220,7 @@ class Worker:
         task_id = reduce_task["task_id"]
         reduce_executable = reduce_task['executable']
         input_paths = reduce_task['input_paths']  # a list of paths
-        output_dir = reduce_task['output_directory']
+        # output_dir = reduce_task['output_directory']
 
         prefix = f"mapreduce-local-task{task_id:05d}-"
         with tempfile.TemporaryDirectory(
@@ -229,10 +234,10 @@ class Worker:
                         open(file, encoding='utf-8')
                     )
                 )
-                
             part_num = input_paths[0][-5:]
             output_path = os.path.join(tmpdir, f"part-{part_num}")
-            with stack.enter_context(open(output_path, 'w', encoding="utf-8")) as output_file:
+            with stack.enter_context(open(output_path, 'w',
+                                          encoding="utf-8")) as output_file:
                 with subprocess.Popen(
                         [reduce_executable],
                         text=True,
@@ -242,11 +247,7 @@ class Worker:
                     # Pipe input to reduce_process
                     for line in heapq.merge(*input_files):
                         reduce_process.stdin.write(line)
-
-                #for file in input_files:
-                #    file.close()
-            # Move to shared directory[]
-            shutil.move(output_path, output_dir)
+            shutil.move(output_path, reduce_task['output_directory'])
 
         LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
