@@ -3,8 +3,6 @@ import os
 import logging
 import json
 import time
-import click
-import mapreduce.utils
 import socket
 import threading
 import tempfile
@@ -12,9 +10,9 @@ import hashlib
 import subprocess
 import shutil
 import heapq
-import contextlib
 from contextlib import ExitStack
 from functools import lru_cache
+import click
 
 # 2. self.worker  is not inserted!
 # 3. I have infinite loop for the fault tolarance. WHY?
@@ -26,6 +24,7 @@ LOGGER = logging.getLogger(__name__)
 
 class Worker:
     """A class representing a Worker node in a MapReduce cluster."""
+
     def __init__(self, host, port, manager_host, manager_port):
         """Construct a Worker instance and start listening for messages."""
         LOGGER.info(
@@ -43,32 +42,29 @@ class Worker:
         self.manager_port = manager_port
         self.signals = {"shutdown": False}
         self.send_heartbeat = False
-
-
-        thread_tcp_server = threading.Thread(target = self.worker_tcp_server)
+        thread_tcp_server = threading.Thread(target=self.worker_tcp_server)
         thread_tcp_server.name = "worker_thread"
-        worker_udp_client = threading.Thread(target = self.worker_udp_client)
+        worker_udp_client = threading.Thread(target=self.worker_udp_client)
         thread_tcp_server.start()
         # while not self.signals["shutdown"]:
         while not self.signals["shutdown"]:
-            if self.send_heartbeat == True:
+            if self.send_heartbeat is True:
                 worker_udp_client.start()
                 break
             time.sleep(0.1)
-        
+
         thread_tcp_server.join()
 
         if worker_udp_client.is_alive():
             worker_udp_client.join()
 
-        
     @lru_cache(maxsize=1024)
     def hash_key(self, key):
         """Cache and return the hash of the key."""
         return int(hashlib.md5(key.encode("utf-8")).hexdigest(), base=16)
 
-
     def worker_tcp_server(self):
+        """Send a registration message to the Manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             # Bind the socket to the server
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -77,16 +73,16 @@ class Worker:
             sock.settimeout(1)
             self.worker_tcp_ack()
 
-            while not self.signals["shutdown"] :
-                # Wait for a connection for 1s.  The socket library avoids consuming
+            while not self.signals["shutdown"]:
+                # Wait for a connection for 1s.
+                # The socket library avoids consuming
                 # CPU while waiting for a connection.
                 try:
                     clientsocket, address = sock.accept()
                 except socket.timeout:
                     continue
-                LOGGER.info(f"Connection from {address[0]}")
+                LOGGER.info("Connection from %s", address[0])
 
-                
                 clientsocket.settimeout(1)
 
                 with clientsocket:
@@ -128,11 +124,9 @@ class Worker:
                 elif message_dict["message_type"] == "new_reduce_task":
                     self.reducer_worker(message_dict)
                     self.send_finished_message(message_dict['task_id'])
-                
-
 
     def worker_udp_client(self):
-        """send heartbeat every 2 seconds"""
+        """Send heartbeat every 2 seconds."""
         while not self.signals["shutdown"]:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 # Connect to the UDP socket on server
@@ -146,57 +140,63 @@ class Worker:
                 sock.sendall(message.encode('utf-8'))
                 time.sleep(2)
 
-
     def mapper_worker(self, map_task):
+        """Send a registration message to the Manager."""
         task_id = map_task['task_id']
         map_executable = map_task['executable']
         input_paths = map_task['input_paths']
         shared_dir = map_task['output_directory']
         num_partitions = map_task['num_partitions']
+        partition_files = []
         # create directory local to worker
         prefix = f"mapreduce-local-task{task_id:05d}-"
-        with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir, ExitStack() as stack:
+        with tempfile.TemporaryDirectory(
+            prefix=prefix
+        ) as tmpdir, ExitStack() as stack:
             LOGGER.info("Created local tmpdir %s", tmpdir)
-            partition_files = {}  # Track file descriptors
+            # partition_files = {}  # Track file descriptors
             # run executable on each file
+            for i in range(num_partitions):
+                partition_path = os.path.join(
+                                tmpdir,
+                                f"maptask{task_id:05d}-part{i:05d}"
+                )
+                partition_files.append(stack.enter_context(open(partition_path, 'w', encoding = "utf-8")))
             for input_path in input_paths:
-                infile = stack.enter_context(open(input_path, 'r'))
-                with subprocess.Popen(
-                    [map_executable],
-                    stdin=infile,
-                    stdout=subprocess.PIPE,
-                    text=True
-                ) as process: #############################TIME ISSUE #########################################
-                    for line in process.stdout:
-                        # partition
-                        key, value = line.split('\t', 1)
-                        #hexdigest = hashlib.md5(key.encode("utf-8")).hexdigest()
-                        #keyhash = int(hexdigest, base=16)
-                        keyhash = self.hash_key(key)
-                        partition_number = keyhash % num_partitions
-                        partition_path = os.path.join(tmpdir, f"maptask{task_id:05d}-part{partition_number:05d}")
-                        if partition_path not in partition_files:
-                            # with ExitStack() as stack:
-                            #partition_files[partition_path] = open(partition_path, 'a') 
-                            # changing to stack.enter_context makes the program stuck
-                            partition_files[partition_path] = stack.enter_context(open(partition_path, 'a'))
-                        partition_files[partition_path].write(line)
+                # infile = stack.enter_context(
+                #     open(input_path, 'r', encoding='utf-8')
+                # )
+                with stack.enter_context(open(input_path, 'r', encoding='utf-8')) as infile:
+                    with subprocess.Popen(
+                        [map_executable],
+                        stdin=infile,
+                        stdout=subprocess.PIPE,
+                        text=True
+                    ) as process:  # TIME ISSUE
+                        for line in process.stdout:
+                            # partition
+                            key = line.partition("\t")[0]
+                            keyhash = self.hash_key(key)
+                            partition_number = keyhash % num_partitions
+                            partition_files[partition_number].write(line)
 
-            for f in partition_files.values():
+            for f in partition_files:
                 f.close()
                 # Sort and move files to shared directory
             for partitionfiles in os.listdir(tmpdir):
                 file_path = os.path.join(tmpdir, partitionfiles)
                 # Sort file
-                subprocess.run(['sort', '-o',file_path, file_path], check = True)
+                subprocess.run(
+                    ['sort', '-o', file_path, file_path], check=True
+                )
                 # Move to shared directory
                 shutil.move(file_path, shared_dir)
                 # os.path.join(shared_dir, partitionfiles
 
         LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
-
     def send_finished_message(self, task_id):
+        """Send a registration message to the Manager."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             # Establish connection to the Manager's main socket
             sock.connect((self.manager_host, self.manager_port))
@@ -208,49 +208,52 @@ class Worker:
             }
             message_str = json.dumps(finished_message)
             sock.sendall(message_str.encode('utf-8'))
-        LOGGER.info(f"Sent 'finished' message for task {task_id}.")
-
+        LOGGER.info("Sent 'finished' message for task %s.", task_id)
 
     def reducer_worker(self, reduce_task):
+        """Send a registration message to the Manager."""
         task_id = reduce_task["task_id"]
         reduce_executable = reduce_task['executable']
-        input_paths = reduce_task['input_paths'] # a list of paths
+        input_paths = reduce_task['input_paths']  # a list of paths
         output_dir = reduce_task['output_directory']
-        
+
         prefix = f"mapreduce-local-task{task_id:05d}-"
-        with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir, ExitStack() as stack:
+        with tempfile.TemporaryDirectory(
+            prefix=prefix
+        ) as tmpdir, ExitStack() as stack:
             LOGGER.info("Created local tmpdir %s", tmpdir)
-            #create the output destination
+            # create the output destination
             part_num = input_paths[0][-5:]
-            output_path = os.path.join(tmpdir, f"part-{part_num}" )
-            output_file = stack.enter_context(open(output_path, 'w'))
+            output_path = os.path.join(tmpdir, f"part-{part_num}")
+            output_file = stack.enter_context(
+                open(output_path, 'w', encoding='utf-8')
+            )
             # a list of file for heap merge
             input_files = []
             for file in input_paths:
-                input_files.append(stack.enter_context(open(file, 'r')))
+                input_files.append(
+                    stack.enter_context(
+                        open(file, 'r', encoding='utf-8')
+                    )
+                )
 
             with subprocess.Popen(
                     [reduce_executable],
                     text=True,
                     stdin=subprocess.PIPE,
                     stdout=output_file
-                ) as reduce_process: #############################TIME ISSUE #########################################
-                    # Pipe input to reduce_process
-                    for line in heapq.merge(*input_files):
-                        reduce_process.stdin.write(line)
+            ) as reduce_process:  # TIME ISSUE
+                # Pipe input to reduce_process
+                for line in heapq.merge(*input_files):
+                    reduce_process.stdin.write(line)
 
             for file in input_files:
                 file.close()
-
             # Move to shared directory[]
             shutil.move(output_path, output_dir)
 
         LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
-
-        
-                            
-                    
     def worker_tcp_ack(self):
         """Send a registration message to the Manager."""
         try:
@@ -265,8 +268,6 @@ class Worker:
                 LOGGER.info("Sent register message to Manager")
         except ConnectionRefusedError:
             LOGGER.info("ConnectionRefusedError")
-    
-
 
 
 @click.command()
@@ -288,6 +289,7 @@ def main(host, port, manager_host, manager_port, logfile, loglevel):
     root_logger.addHandler(handler)
     root_logger.setLevel(loglevel.upper())
     Worker(host, port, manager_host, manager_port)
+
 
 if __name__ == "__main__":
     main()
