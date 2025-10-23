@@ -1,6 +1,6 @@
 # MapReduce Framework
 
-A distributed MapReduce framework implementation in Python, inspired by Google's original MapReduce paper. Built as part of EECS 485 (Web Systems) at the University of Michigan.
+A distributed MapReduce framework implementation in Python, inspired by [Google's original MapReduce paper](https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf).
 
 ## 🎯 Project Overview
 
@@ -60,6 +60,7 @@ This project implements a complete MapReduce framework that executes distributed
 - Handles graceful shutdown
 
 ## 🔄 MapReduce Execution Flow
+<img width="784" height="342" alt="image" src="https://github.com/user-attachments/assets/93b4057b-e40c-40ec-8930-4c3acc97a0d0" />
 
 ### Map Stage
 1. **Input Partitioning**: Manager divides input files using round-robin
